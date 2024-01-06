@@ -1,4 +1,4 @@
-# About Entities
+# About ODin ECS
 This package adds Odin support to Unity's Entities package. The original Entities package is part of Unity's Data-Oriented Technology Stack (DOTS), and provides a data-oriented implementation of the Entity Component System (ECS) architecture.
 
 ## Installing Entities
