@@ -1,0 +1,29 @@
+apiRules:
+  - exclude:
+      # inherited Object methods
+      uidRegex: ^System\.Object\..*$
+      type: Method
+  - exclude:
+      # mentioning types from System.* namespace
+      uidRegex: ^System\..*$
+      type: Type
+  - exclude:
+      uidRegex: Tests$
+      type: Namespace
+  - exclude:
+      uidRegex: ^Unity\..*\.Tests\..*$
+      type: Namespace
+  - exclude:
+      uidRegex: ^Some\.Namespace
+      type: Namespace
+  - exclude:
+      uidRegex: ^docnamespace_
+      type: Namespace
+  - exclude:
+      uidRegex: ^docnamespace.*
+      type: Namespace
+  - exclude:
+      uidRegex: .*Test.*
+  - exclude:
+      uidRegex: ^MyNamespace.System
+      type: Namespace

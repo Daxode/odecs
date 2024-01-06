@@ -1,0 +1,26 @@
+{
+  "name": "com.daxode.odecs",
+  "displayName": "ODin ECS - odecs",
+  "version": "0.1.0",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.unity.entities": "1.0.16",
+    "com.unity.burst": "1.8.8",
+    "com.unity.collections": "2.1.4",
+    "com.unity.mathematics": "1.2.6"
+  },
+  "description": "This package adds Odin support to Unity's Entities package. The original Entities package is part of Unity's Data-Oriented Technology Stack (DOTS), and provides a data-oriented implementation of the Entity Component System (ECS) architecture.",
+  "keywords": [
+    "odin",
+    "ecs",
+    "entities",
+    "dots"
+  ],
+  "documentationUrl": "https://github.com/daxode/odecs/wiki",
+  "repository": {
+    "url": "https://github.com/daxode/odecs.git",
+    "type": "git",
+    "revision": "as9234fef6ddcca2b5f84470add1c1d1c183dd68"
+  }
+}
