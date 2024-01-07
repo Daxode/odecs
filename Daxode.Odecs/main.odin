@@ -9,24 +9,24 @@ import "core:runtime"
 import "core:strconv"
 import "core:strings"
 import "core:os"
+import "core:intrinsics"
 
 odecs_context: runtime.Context
 
+functions_that_call_unity :: struct {
+    debugLog: proc "cdecl" (str: cstring, len: int)
+}
+
 @export
-init :: proc "c" (hello: proc "cdecl" (str: cstring, len: int)) {
+init :: proc "c" (funcs_that_call_unity: ^functions_that_call_unity) {
     odecs_context = runtime.default_context()
     odecs_context.logger = {
         options = {.Short_File_Path, .Line},
-        data = transmute(rawptr)(hello),
+        data = rawptr(funcs_that_call_unity),
         procedure = proc(data: rawptr, level: runtime.Logger_Level, text: string, options: runtime.Logger_Options, location := #caller_location) {
-            hello := transmute(proc "cdecl" (str: cstring, len: int))(data)
-            // builder := strings.builder_make()
-            // strings.write_string(&builder, text)
-            // strings.write_byte(&builder, '\n')
-            // log.do_location_header(options, &builder, location)
-            // strings.to_string(builder)
+            funcs_that_call_unity := transmute(^functions_that_call_unity)(data)
             my_test := strings.clone_to_cstring(text)
-            hello(my_test, len(my_test)+1)
+            funcs_that_call_unity.debugLog(my_test, len(my_test)+1)
         },
     }
 }
@@ -57,8 +57,48 @@ Rotate :: proc "c" (entity_count_in_chunk: int, transforms: [^]LocalTransform, s
         transform.Rotation *= RotateY(time.DeltaTime * spinspeeds[i].radiansPerSecond);
         transform.Position.y = math.sin(f32(time.ElapsedTime));
     }
-    log.debug("Yyayyy")
-    log.debug("hello world")
+    vall: i32 = -5
+    for val in test(&vall) {
+        log.debug(val, vall)
+    }
+
+    // valy := LocalTransform{}
+    // test_2(MyThing)
+}
+
+test :: proc(itr: ^i32) -> (val: i32, cond: b8) {
+    if (itr^ < 3) {
+        itr^ += 1
+        val = itr^ * i32(2)
+        cond = true
+    } else {
+        val = 5
+        cond = false
+    }
+
+    return
+}
+
+ecs_component_group :: union {
+    LocalTransform,
+    SpinSpeed
+}
+
+test_2  :: proc($T: typeid) where intrinsics.type_is_struct(T) 
+{
+    mee, ok := type_info_of(T).variant.(runtime.Type_Info_Named)
+    if ok {
+        log.debug(mee.base.variant)
+        #partial switch val in mee.base.variant {
+            case runtime.Type_Info_Struct:
+                log.debug(val)
+        } 
+    }
+}
+
+@(component)
+MyThing :: struct {
+    using testing: LocalTransform
 }
 
 RotateY :: proc "contextless" (angle: f32) -> quaternion128

@@ -28,9 +28,10 @@ struct SpinSpeed : IComponentData {
     public float radiansPerSecond;
 }
 
+[BurstCompile]
 unsafe static class odecs_calls {
     struct UnmanagedData {
-        static IntPtr loaded_lib;
+        IntPtr loaded_lib;
         public void load_calls() {
             if (loaded_lib==IntPtr.Zero)
                 loaded_lib = win32.LoadLibrary(Path.GetFullPath("Packages/odecs/Daxode.Odecs/out/odecs.dll"));
@@ -51,10 +52,45 @@ unsafe static class odecs_calls {
     public static void load_calls() => data.Data.load_calls();
     public static void unload_calls() => data.Data.unload_calls();
 
-    static readonly SharedStatic<UnmanagedData> data = SharedStatic<UnmanagedData>.GetOrCreate<UnmanagedData>();
+    struct SpecialKey {}
+    static readonly SharedStatic<UnmanagedData> data = SharedStatic<UnmanagedData>.GetOrCreate<SpecialKey>();
 
-    public static delegate* unmanaged[Cdecl]<IntPtr, void>  init 
-            => (delegate* unmanaged[Cdecl]<IntPtr, void>) data.Data.init;
+    [BurstCompile]
+    struct FunctionsToCallFromOdin {
+        IntPtr debugLog;
+        public void Init() {
+            debugLog = BurstCompiler.CompileFunctionPointer<DebugLog>(Log).Value;
+        }
+
+        unsafe struct FakeUntypedUnsafeList {
+    #pragma warning disable 169
+            [NativeDisableUnsafePtrRestriction]
+            internal void* Ptr;
+            internal int m_length;
+            internal int m_capacity;
+            internal AllocatorManager.AllocatorHandle Allocator;
+            internal int padding;
+    #pragma warning restore 169
+        }
+        [BurstCompile]
+        [MonoPInvokeCallback(typeof(DebugLog))]
+        unsafe static void Log (byte* str, int length){
+            var text = new FakeUntypedUnsafeList { Ptr = str, m_length = length, m_capacity = length, Allocator = default,  padding = 0};
+            Debug.Log($"{new FixedString512Bytes(UnsafeUtility.As<FakeUntypedUnsafeList, UnsafeText>(ref text))}");
+        }
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        unsafe delegate void DebugLog(byte* str, int length);
+    }
+
+    static FunctionsToCallFromOdin s_functionsToCallFromOdin;
+    public unsafe static void  init()
+    {
+        s_functionsToCallFromOdin.Init();
+        var odecs_init = (delegate* unmanaged[Cdecl]<ref FunctionsToCallFromOdin, void>) data.Data.init;
+        odecs_init(ref s_functionsToCallFromOdin);
+    }
+
     public static delegate* unmanaged[Cdecl]<int, LocalTransform*, SpinSpeed*, TimeData*, void> Rotate 
             => (delegate* unmanaged[Cdecl]<int, LocalTransform*, SpinSpeed*, TimeData*, void>) data.Data.Rotate;
 }
@@ -76,30 +112,9 @@ partial struct odecs_setup_system : ISystem {
     ComponentTypeHandle<LocalTransform> transformHandle;
     EntityQuery query;
 
-    unsafe struct FakeList {
-#pragma warning disable 169
-        [NativeDisableUnsafePtrRestriction]
-        internal void* Ptr;
-        internal int m_length;
-        internal int m_capacity;
-        internal AllocatorManager.AllocatorHandle Allocator;
-        internal int padding;
-#pragma warning restore 169
-    }
-
-    [BurstCompile]
-    [MonoPInvokeCallback(typeof(DebugLog))]
-    unsafe static void Log (byte* str, int length){
-        var text = new FakeList { Ptr = str, m_length = length, m_capacity = length, Allocator = default,  padding = 0};
-        Debug.Log($"{new FixedString512Bytes(UnsafeUtility.As<FakeList, UnsafeText>(ref text))}");
-    }
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    unsafe delegate void DebugLog(byte* str, int length);
-
     public unsafe void OnCreate(ref SystemState state){
         odecs_calls.load_calls();
-        odecs_calls.init(BurstCompiler.CompileFunctionPointer<DebugLog>(Log).Value);
+        odecs_calls.init();
         speedHandle = SystemAPI.GetComponentTypeHandle<SpinSpeed>(true);
         transformHandle = SystemAPI.GetComponentTypeHandle<LocalTransform>();
         query = SystemAPI.QueryBuilder().WithAll<SpinSpeed, LocalTransform>().Build();
@@ -107,6 +122,9 @@ partial struct odecs_setup_system : ISystem {
 
     [BurstCompile]
     public unsafe void OnUpdate(ref SystemState state){
+        if (Input.GetKey(KeyCode.Space))
+            return;
+
         state.EntityManager.CompleteDependencyBeforeRW<LocalTransform>();
         speedHandle.Update(ref state);
         transformHandle.Update(ref state);
