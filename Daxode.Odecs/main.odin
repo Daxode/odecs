@@ -13,20 +13,93 @@ import "core:intrinsics"
 
 odecs_context: runtime.Context
 
-functions_that_call_unity :: struct {
-    debugLog: proc "cdecl" (str: cstring, len: int)
+functions_that_call_unity :: struct #packed {
+    debugLog: proc "cdecl" (str: cstring, len: int),
+    GetComponentDataROPtr: GetComponentDataPtr(byte),
+    GetComponentDataRWPtr: GetComponentDataPtr(byte),
 }
 
+GetComponentDataPtr :: struct($T: typeid) {
+    func: proc "cdecl" (archChunk: ^ArchetypeChunk, typeHandle: ^ComponentTypeHandle(T)) -> [^]T
+}
+
+LookupCache :: struct #packed
+{
+    Archetype: rawptr,
+    ComponentOffset: int,
+    ComponentSizeOf: u16,
+    IndexInArchetype: i16,
+}
+
+ComponentTypeHandle :: struct($T: typeid) #packed
+{
+    m_LookupCache: LookupCache,
+    m_TypeIndex: TypeIndex,
+    m_SizeInChunk: int,
+    m_GlobalSystemVersion: uint,
+    m_IsReadOnly: byte,
+    m_IsZeroSized: byte,
+}
+
+TypeIndex :: distinct int
+
+ArchetypeChunk :: struct #packed {
+    m_Chunk: ^Chunk,
+    m_EntityComponentStore: rawptr
+}
+
+Entity :: struct #packed {
+    identifier, version: i32
+}
+
+Chunk :: struct #packed {
+    Archetype: rawptr,
+    metaChunkEntity: Entity,
+    Count: i32,
+    Capacity: i32,
+    ListIndex: i32,
+    ListWithEmptySlotsIndex: i32,
+    Flags: u32,
+    ChunkstoreIndex: i32,
+    SequenceNumber: u64
+}
+
+COLLECTION_CHECKS :: true
+
+NativeArray :: struct($T: typeid) #packed where COLLECTION_CHECKS {
+    m_Buffer : [^]T,
+    m_Length : int,
+    m_MinIndex, m_MaxIndex: int,
+    m_Safety: AtomicSafetyHandle,
+    m_AllocatorLabel: Allocator
+}
+
+Allocator :: enum {
+    Invalid = 0,
+    None = 1,
+    Temp = 2,
+    TempJob = 3,
+    Persistent = 4,
+    AudioKernel = 5,
+    FirstUserIndex = 64
+}
+
+AtomicSafetyHandle :: struct #packed {
+    versionNode: rawptr,
+    version: int,
+    staticSafetyId: int,
+}
+
+unity_funcs: functions_that_call_unity
 @export
 init :: proc "c" (funcs_that_call_unity: ^functions_that_call_unity) {
+    unity_funcs = funcs_that_call_unity^
     odecs_context = runtime.default_context()
     odecs_context.logger = {
         options = {.Short_File_Path, .Line},
-        data = rawptr(funcs_that_call_unity),
         procedure = proc(data: rawptr, level: runtime.Logger_Level, text: string, options: runtime.Logger_Options, location := #caller_location) {
-            funcs_that_call_unity := transmute(^functions_that_call_unity)(data)
             my_test := strings.clone_to_cstring(text)
-            funcs_that_call_unity.debugLog(my_test, len(my_test)+1)
+            unity_funcs.debugLog(my_test, len(my_test)+1)
         },
     }
 }
@@ -48,57 +121,29 @@ SpinSpeed :: struct {
     radiansPerSecond : c.float
 }
 
+GetComponentDataRWPtr :: proc (archChunk: ^ArchetypeChunk, typeHandle: ^ComponentTypeHandle($T)) -> []T
+{
+    return (transmute(GetComponentDataPtr(T))(unity_funcs.GetComponentDataRWPtr)).func(archChunk, typeHandle)[:archChunk.m_Chunk.Count]
+}
+
+GetComponentDataROPtr :: proc (archChunk: ^ArchetypeChunk, typeHandle: ^ComponentTypeHandle($T)) -> []T
+{
+    return (transmute(GetComponentDataPtr(T))(unity_funcs.GetComponentDataROPtr)).func(archChunk, typeHandle)[:archChunk.m_Chunk.Count]
+}
+
 @export
-Rotate :: proc "c" (entity_count_in_chunk: int, transforms: [^]LocalTransform, spinspeeds: [^]SpinSpeed, time: ^TimeData)
+Rotate :: proc "c" (chunks: ^NativeArray(ArchetypeChunk), transform_handle: ^ComponentTypeHandle(LocalTransform), spinspeed_handle: ^ComponentTypeHandle(SpinSpeed), time: ^TimeData)
 {
     context = odecs_context
-    for &transform, i in transforms[:entity_count_in_chunk]
-    {   
-        transform.Rotation *= RotateY(time.DeltaTime * spinspeeds[i].radiansPerSecond);
-        transform.Position.y = math.sin(f32(time.ElapsedTime));
+    for &chunk in chunks.m_Buffer[:chunks.m_Length]{
+        transforms := GetComponentDataRWPtr(&chunk, transform_handle)
+        spinspeeds := GetComponentDataROPtr(&chunk, spinspeed_handle)
+        for &transform, i in transforms
+        {
+            transform.Rotation *= RotateY(time.DeltaTime * spinspeeds[i].radiansPerSecond);
+            transform.Position.y = math.sin(f32(time.ElapsedTime));
+        }
     }
-    vall: i32 = -5
-    for val in test(&vall) {
-        log.debug(val, vall)
-    }
-
-    // valy := LocalTransform{}
-    // test_2(MyThing)
-}
-
-test :: proc(itr: ^i32) -> (val: i32, cond: b8) {
-    if (itr^ < 3) {
-        itr^ += 1
-        val = itr^ * i32(2)
-        cond = true
-    } else {
-        val = 5
-        cond = false
-    }
-
-    return
-}
-
-ecs_component_group :: union {
-    LocalTransform,
-    SpinSpeed
-}
-
-test_2  :: proc($T: typeid) where intrinsics.type_is_struct(T) 
-{
-    mee, ok := type_info_of(T).variant.(runtime.Type_Info_Named)
-    if ok {
-        log.debug(mee.base.variant)
-        #partial switch val in mee.base.variant {
-            case runtime.Type_Info_Struct:
-                log.debug(val)
-        } 
-    }
-}
-
-@(component)
-MyThing :: struct {
-    using testing: LocalTransform
 }
 
 RotateY :: proc "contextless" (angle: f32) -> quaternion128

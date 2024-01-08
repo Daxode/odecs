@@ -10,6 +10,7 @@ using Unity.Mathematics;
 using Unity.Transforms;
 using UnityEngine;
 using MonoPInvokeCallbackAttribute = AOT.MonoPInvokeCallbackAttribute;
+using Unity.Burst.CompilerServices;
 
 public class SpinningAuthor : MonoBehaviour
 {
@@ -58,8 +59,55 @@ unsafe static class odecs_calls {
     [BurstCompile]
     struct FunctionsToCallFromOdin {
         IntPtr debugLog;
+        IntPtr chunkGetComponentPtrRO;
+        IntPtr chunkGetComponentPtrRW;
         public void Init() {
             debugLog = BurstCompiler.CompileFunctionPointer<DebugLog>(Log).Value;
+            chunkGetComponentPtrRO = BurstCompiler.CompileFunctionPointer<GetComponentDataPtrFunc>(GetComponentDataPtrRO).Value;
+            chunkGetComponentPtrRW = BurstCompiler.CompileFunctionPointer<GetComponentDataPtrFunc>(GetComponentDataPtrRW).Value;
+        }
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        unsafe delegate byte* GetComponentDataPtrFunc(ArchetypeChunk* archChunk, ref ComponentTypeHandle<byte> typeHandle);
+        
+        [BurstCompile]
+        [MonoPInvokeCallback(typeof(GetComponentDataPtrFunc))]
+        static byte* GetComponentDataPtrRO(ArchetypeChunk* archChunk, ref ComponentTypeHandle<byte> typeHandle)
+        {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            AtomicSafetyHandle.CheckReadAndThrow(typeHandle.m_Safety);
+#endif
+
+            // This updates the type handle's cache as a side effect, which will tell us if the archetype has the component
+            // or not.
+            return ChunkDataUtility.GetOptionalComponentDataWithTypeRO(archChunk->m_Chunk, archChunk->m_Chunk->Archetype, 0,
+                typeHandle.m_TypeIndex, ref typeHandle.m_LookupCache);
+        }
+        
+        [BurstCompile]
+        [MonoPInvokeCallback(typeof(GetComponentDataPtrFunc))]
+        static byte* GetComponentDataPtrRW(ArchetypeChunk* archChunk, ref ComponentTypeHandle<byte> typeHandle)
+        {
+#if ENABLE_UNITY_COLLECTIONS_CHECKS
+            AtomicSafetyHandle.CheckWriteAndThrow(typeHandle.m_Safety);
+#endif
+#if ENABLE_UNITY_COLLECTIONS_CHECKS || UNITY_DOTS_DEBUG
+            if (Hint.Unlikely(typeHandle.IsReadOnly))
+                throw new InvalidOperationException(
+                    "Provided ComponentTypeHandle is read-only; can't get a read/write pointer to component data");
+#endif
+
+            byte* ptr = ChunkDataUtility.GetOptionalComponentDataWithTypeRW(archChunk->m_Chunk, archChunk->m_Chunk->Archetype,
+                0, typeHandle.m_TypeIndex,
+                typeHandle.GlobalSystemVersion, ref typeHandle.m_LookupCache);
+
+#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !DISABLE_ENTITIES_JOURNALING
+            if (Hint.Unlikely(archChunk->m_EntityComponentStore->m_RecordToJournal != 0))
+                archChunk->JournalAddRecordGetComponentDataRW(ref typeHandle, ptr,
+                    typeHandle.m_LookupCache.ComponentSizeOf * archChunk->Count);
+#endif
+
+            return ptr;
         }
 
         unsafe struct FakeUntypedUnsafeList {
@@ -91,8 +139,8 @@ unsafe static class odecs_calls {
         odecs_init(ref s_functionsToCallFromOdin);
     }
 
-    public static delegate* unmanaged[Cdecl]<int, LocalTransform*, SpinSpeed*, TimeData*, void> Rotate 
-            => (delegate* unmanaged[Cdecl]<int, LocalTransform*, SpinSpeed*, TimeData*, void>) data.Data.Rotate;
+    public static delegate* unmanaged[Cdecl]<NativeArray<ArchetypeChunk>*, void*, void*, TimeData*, void> Rotate 
+            => (delegate* unmanaged[Cdecl]<NativeArray<ArchetypeChunk>*, void*, void*, TimeData*, void>) data.Data.Rotate;
 }
 
 static class win32 {
@@ -129,12 +177,11 @@ partial struct odecs_setup_system : ISystem {
         speedHandle.Update(ref state);
         transformHandle.Update(ref state);
         var chunks = query.ToArchetypeChunkArray(state.WorldUpdateAllocator);
-        foreach (var chunk in chunks){
-            var count = chunk.Count;
-            var speedPtr = chunk.GetComponentDataPtrRO(ref speedHandle);
-            var transformPtr = chunk.GetComponentDataPtrRW(ref transformHandle);
-            odecs_calls.Rotate(count, transformPtr, speedPtr, (TimeData*)UnsafeUtility.AddressOf(ref state.WorldUnmanaged.Time));
-        }
+        odecs_calls.Rotate(
+            (NativeArray<ArchetypeChunk>*)UnsafeUtility.AddressOf(ref chunks), 
+            UnsafeUtility.AddressOf(ref transformHandle), 
+            UnsafeUtility.AddressOf(ref speedHandle), 
+            (TimeData*)UnsafeUtility.AddressOf(ref state.WorldUnmanaged.Time));
     }
 
     public void OnDestroy(ref SystemState state) {
