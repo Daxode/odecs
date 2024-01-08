@@ -139,8 +139,8 @@ unsafe static class odecs_calls {
         odecs_init(ref s_functionsToCallFromOdin);
     }
 
-    public static delegate* unmanaged[Cdecl]<NativeArray<ArchetypeChunk>*, void*, void*, TimeData*, void> Rotate 
-            => (delegate* unmanaged[Cdecl]<NativeArray<ArchetypeChunk>*, void*, void*, TimeData*, void>) data.Data.Rotate;
+    public static delegate* unmanaged[Cdecl]<ref SystemState, void*, void*, TimeData*, void> Rotate 
+            => (delegate* unmanaged[Cdecl]<ref SystemState, void*, void*, TimeData*, void>) data.Data.Rotate;
 }
 
 static class win32 {
@@ -178,7 +178,7 @@ partial struct odecs_setup_system : ISystem {
         transformHandle.Update(ref state);
         var chunks = query.ToArchetypeChunkArray(state.WorldUpdateAllocator);
         odecs_calls.Rotate(
-            (NativeArray<ArchetypeChunk>*)UnsafeUtility.AddressOf(ref chunks), 
+            ref state, 
             UnsafeUtility.AddressOf(ref transformHandle), 
             UnsafeUtility.AddressOf(ref speedHandle), 
             (TimeData*)UnsafeUtility.AddressOf(ref state.WorldUnmanaged.Time));
