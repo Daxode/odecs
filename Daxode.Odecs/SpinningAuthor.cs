@@ -11,6 +11,7 @@ using Unity.Transforms;
 using UnityEngine;
 using MonoPInvokeCallbackAttribute = AOT.MonoPInvokeCallbackAttribute;
 using Unity.Burst.CompilerServices;
+using System.Reflection;
 
 public class SpinningAuthor : MonoBehaviour
 {
@@ -139,8 +140,8 @@ unsafe static class odecs_calls {
         odecs_init(ref s_functionsToCallFromOdin);
     }
 
-    public static delegate* unmanaged[Cdecl]<ref SystemState, void*, void*, TimeData*, void> Rotate 
-            => (delegate* unmanaged[Cdecl]<ref SystemState, void*, void*, TimeData*, void>) data.Data.Rotate;
+    public static delegate* unmanaged[Cdecl]<ref SystemState, ref WorldUnmanaged, ref RewindableAllocator, void*, void*, TimeData*, void> Rotate 
+            => (delegate* unmanaged[Cdecl]<ref SystemState, ref WorldUnmanaged, ref RewindableAllocator, void*, void*, TimeData*, void>) data.Data.Rotate;
 }
 
 static class win32 {
@@ -176,9 +177,10 @@ partial struct odecs_setup_system : ISystem {
         state.EntityManager.CompleteDependencyBeforeRW<LocalTransform>();
         speedHandle.Update(ref state);
         transformHandle.Update(ref state);
+        Debug.Log(state.m_WorldUnmanaged.UpdateAllocator.ToAllocator);
         var chunks = query.ToArchetypeChunkArray(state.WorldUpdateAllocator);
         odecs_calls.Rotate(
-            ref state, 
+            ref state, ref state.m_WorldUnmanaged, ref state.m_WorldUnmanaged.UpdateAllocator,
             UnsafeUtility.AddressOf(ref transformHandle), 
             UnsafeUtility.AddressOf(ref speedHandle), 
             (TimeData*)UnsafeUtility.AddressOf(ref state.WorldUnmanaged.Time));

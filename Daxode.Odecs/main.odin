@@ -26,7 +26,7 @@ GetComponentDataPtr :: struct($T: typeid) {
 LookupCache :: struct #packed
 {
     Archetype: rawptr,
-    ComponentOffset: int,
+    ComponentOffset: i32,
     ComponentSizeOf: u16,
     IndexInArchetype: i16,
 }
@@ -35,14 +35,14 @@ ComponentTypeHandle :: struct($T: typeid) #packed
 {
     m_LookupCache: LookupCache,
     m_TypeIndex: TypeIndex,
-    m_SizeInChunk: int,
-    m_GlobalSystemVersion: uint,
+    m_SizeInChunk: i32,
+    m_GlobalSystemVersion: u32,
     m_IsReadOnly: byte,
     m_IsZeroSized: byte,
 }
 
-TypeIndex :: distinct int
-SystemTypeIndex :: distinct int
+TypeIndex :: distinct i32
+SystemTypeIndex :: distinct i32
 
 ArchetypeChunk :: struct #packed {
     m_Chunk: ^Chunk,
@@ -69,13 +69,13 @@ COLLECTION_CHECKS :: true
 
 NativeArray :: struct($T: typeid) #packed where COLLECTION_CHECKS {
     m_Buffer : [^]T,
-    m_Length : int,
-    m_MinIndex, m_MaxIndex: int,
+    m_Length : i32,
+    m_MinIndex, m_MaxIndex: i32,
     m_Safety: AtomicSafetyHandle,
     m_AllocatorLabel: Allocator
 }
 
-Allocator :: enum {
+Allocator :: enum u32 {
     Invalid = 0,
     None = 1,
     Temp = 2,
@@ -87,20 +87,20 @@ Allocator :: enum {
 
 AtomicSafetyHandle :: struct #packed {
     versionNode: rawptr,
-    version: int,
-    staticSafetyId: int,
+    version: i32,
+    staticSafetyId: i32,
 }
 
 ProfilerMarker :: distinct rawptr
 
-SystemState :: struct #packed
+SystemState :: struct #align(4)
 {
     m_SystemPtr: rawptr,
     m_JobHandle: JobHandle,
-    m_Flags: u32,
+    m_Flags: u64,
     m_DependencyManager: rawptr,
     m_EntityComponentStore: rawptr,
-    m_LastSystemVersion: u32,
+    m_LastSystemVersion: u64,
     m_ProfilerMarker, m_ProfilerMarkerBurst: ProfilerMarker,
     m_Self: rawptr,
     m_SystemTypeIndex: SystemTypeIndex,
@@ -112,7 +112,7 @@ SystemState :: struct #packed
     m_RequiredEntityQueries: UnsafeList(EntityQuery),
     m_WorldUnmanaged: WorldUnmanaged,
     m_Handle: SystemHandle,
-    m_UnmanagedMetaIndex: i32,
+    m_UnmanagedMetaIndex: i64,
     m_World: rawptr,
     m_ManagedSystem: rawptr,
     m_DebugName: NativeText_ReadOnly,
@@ -123,13 +123,13 @@ SystemHandle :: struct #packed
     m_Entity: Entity,
     m_Handle: u16,
     m_Version: u16,
-    m_WorldSeqNo: uint,
+    m_WorldSeqNo: u32,
 }
 
 EntityManager :: struct #packed
 {
     m_Safety: AtomicSafetyHandle,
-    m_IsInExclusiveTransaction: b8,
+    m_IsInExclusiveTransaction: b64,
     m_EntityDataAccess: rawptr
 }
 
@@ -142,7 +142,7 @@ WorldUnmanaged :: struct #packed
 WorldUnmanagedImpl :: struct #packed
 {
     m_WorldAllocatorHelper: AllocatorHelper(AutoFreeAllocator),
-    m_SystemStatePtrMap: NativeParallelHashMap(int, rawptr),
+    m_SystemStatePtrMap: NativeParallelHashMap(i32, rawptr),
     _stateMemory: StateAllocator,
     _unmanagedSlotByTypeHash: UnsafeParallelMultiHashMap(i64, u16),
     sysHandlesInCreationOrder: UnsafeList(PerWorldSystemInfo),
@@ -151,7 +151,7 @@ WorldUnmanagedImpl :: struct #packed
     CurrentTime: TimeData,
     Name: FixedString128Bytes,
     ExecutingSystem: SystemHandle,
-    DoubleUpdateAllocators: DoubleRewindableAllocators,
+    DoubleUpdateAllocators: ^DoubleRewindableAllocators,
     GroupUpdateAllocators: ^DoubleRewindableAllocators,
     m_EntityManager: EntityManager,
     MaximumDeltaTime: f32,
@@ -166,7 +166,7 @@ StateAllocator :: struct #packed
     m_Level1: rawptr // StateAllocLevel1*
 }
 
-AllocatorHelper :: struct($T: typeid) #packed
+AllocatorHelper :: struct($T: typeid)
 {
     m_allocator: ^T,
     m_backingAllocator: AllocatorManager_AllocatorHandle
@@ -189,19 +189,19 @@ ArrayOfArrays :: struct($T: typeid) #packed
     m_block: ^rawptr,
 }
 
-UnsafeParallelMultiHashMap :: struct($TKey, $TValue: typeid) #packed
+UnsafeParallelMultiHashMap :: struct($TKey, $TValue: typeid)
 {
     m_Buffer: rawptr, // UnsafeParallelHashMapData*
     m_AllocatorLabel: AllocatorManager_AllocatorHandle
 }
 
-UnsafeParallelHashMap :: struct($TKey, $TValue: typeid) #packed
+UnsafeParallelHashMap :: struct($TKey, $TValue: typeid)
 {
     m_Buffer: rawptr, // UnsafeParallelHashMapData*
     m_AllocatorLabel: AllocatorManager_AllocatorHandle
 }
 
-NativeParallelHashMap :: struct($TKey, $TValue: typeid) #packed
+NativeParallelHashMap :: struct($TKey, $TValue: typeid)
 {
     m_HashMapData: UnsafeParallelHashMap(TKey, TValue),
     m_Safety: AtomicSafetyHandle
@@ -258,20 +258,19 @@ FixedString128Bytes :: struct #packed
 FixedBytes126 :: [126]u8
 FixedBytes16 :: [16]u8
 WorldFlag :: enum {
-    None       = 0,
-    Live       = 1,
-    Editor     = 2,
-    Game       = 3,
-    Simulation = 4,
-    Conversion = 5,
-    Staging    = 6,
-    Shadow     = 7,
-    Streaming  = 8,
-    GameServer = 9,
-    GameClient = 10,
-    GameThinClient = 11,
+    Live       = 0,
+    Editor     = 1,
+    Game       = 2,
+    Simulation = 3,
+    Conversion = 4,
+    Staging    = 5,
+    Shadow     = 6,
+    Streaming  = 7,
+    GameServer = 8,
+    GameClient = 9,
+    GameThinClient = 10,
 }
-WorldFlags :: bit_set[WorldFlag]
+WorldFlags :: bit_set[WorldFlag; u64]
 
 EntityQuery :: struct #packed
 {
@@ -282,7 +281,7 @@ EntityQuery :: struct #packed
 
 UnsafeList :: struct($T: typeid) #packed
 {
-    Ptr: []T,
+    Ptr: [^]T,
     m_length: i32,
     m_capacity: i32,
     Allocator: AllocatorManager_AllocatorHandle,
@@ -297,7 +296,7 @@ ToAllocatorAllocatorManager_AllocatorHandle :: proc "contextless" (allocatorHand
 {
     lo := allocatorHandle.Index;
     hi := allocatorHandle.Version;
-    value := (hi << 16) | lo;
+    value := (u32(hi) << 16) | u32(lo);
     return Allocator(value);
 }
 
@@ -362,7 +361,7 @@ GetWorldUpdateAllocator :: proc "contextless" (state: ^SystemState) -> Allocator
 }
 
 @export
-Rotate :: proc "c" (state: ^SystemState, transform_handle: ^ComponentTypeHandle(LocalTransform), spinspeed_handle: ^ComponentTypeHandle(SpinSpeed), time: ^TimeData)
+Rotate :: proc "c" (state: ^SystemState, world: ^WorldUnmanaged, alloc: ^RewindableAllocator, transform_handle: ^ComponentTypeHandle(LocalTransform), spinspeed_handle: ^ComponentTypeHandle(SpinSpeed), time: ^TimeData)
 {
     context = odecs_context
     worldUpdateAllocator := GetWorldUpdateAllocator(state)
