@@ -62,10 +62,16 @@ unsafe static class odecs_calls {
         IntPtr debugLog;
         IntPtr chunkGetComponentPtrRO;
         IntPtr chunkGetComponentPtrRW;
+        IntPtr entityQueryToArchetypeChunkArray;
+        IntPtr systemStateGlobalSystemVersion;
+        IntPtr getASHForComponent;
         public void Init() {
             debugLog = BurstCompiler.CompileFunctionPointer<DebugLog>(Log).Value;
             chunkGetComponentPtrRO = BurstCompiler.CompileFunctionPointer<GetComponentDataPtrFunc>(GetComponentDataPtrRO).Value;
             chunkGetComponentPtrRW = BurstCompiler.CompileFunctionPointer<GetComponentDataPtrFunc>(GetComponentDataPtrRW).Value;
+            entityQueryToArchetypeChunkArray = BurstCompiler.CompileFunctionPointer<ToArchetypeChunkArrayFunc>(ToArchetypeChunkArray).Value;
+            systemStateGlobalSystemVersion = BurstCompiler.CompileFunctionPointer<SystemStateGlobalSystemVersionFunc>(SystemStateGlobalSystemVersion).Value;
+            getASHForComponent = BurstCompiler.CompileFunctionPointer<GetASHForComponentFunc>(GetASHForComponent).Value;
         }
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -111,6 +117,27 @@ unsafe static class odecs_calls {
             return ptr;
         }
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        unsafe delegate void ToArchetypeChunkArrayFunc(EntityQueryImpl* queryImpl, AllocatorManager.AllocatorHandle* allocator, NativeArray<ArchetypeChunk>* array);
+
+        [BurstCompile]
+        [MonoPInvokeCallback(typeof(ToArchetypeChunkArrayFunc))]
+        static void ToArchetypeChunkArray(EntityQueryImpl* queryImpl, AllocatorManager.AllocatorHandle* allocator, NativeArray<ArchetypeChunk>* array) => *array = queryImpl->ToArchetypeChunkArray(*allocator);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        unsafe delegate uint SystemStateGlobalSystemVersionFunc(SystemState* state);
+
+        [BurstCompile]
+        [MonoPInvokeCallback(typeof(SystemStateGlobalSystemVersionFunc))]
+        static uint SystemStateGlobalSystemVersion(SystemState* state) => state->GlobalSystemVersion;
+
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        unsafe delegate void GetASHForComponentFunc(SystemState* state, TypeIndex* typeIndex, byte isReadOnly, AtomicSafetyHandle* ash);
+        [BurstCompile]
+        [MonoPInvokeCallback(typeof(GetASHForComponentFunc))]
+        static void GetASHForComponent(SystemState* state, TypeIndex* typeIndex, byte isReadOnly, AtomicSafetyHandle* ash) => *ash = state->m_DependencyManager->Safety.GetSafetyHandleForComponentTypeHandle(*typeIndex, isReadOnly>0);
+
         unsafe struct FakeUntypedUnsafeList {
     #pragma warning disable 169
             [NativeDisableUnsafePtrRestriction]
@@ -140,8 +167,8 @@ unsafe static class odecs_calls {
         odecs_init(ref s_functionsToCallFromOdin);
     }
 
-    public static delegate* unmanaged[Cdecl]<ref SystemState, ref WorldUnmanaged, ref RewindableAllocator, void*, void*, TimeData*, void> Rotate 
-            => (delegate* unmanaged[Cdecl]<ref SystemState, ref WorldUnmanaged, ref RewindableAllocator, void*, void*, TimeData*, void>) data.Data.Rotate;
+    public static delegate* unmanaged[Cdecl]<ref SystemState, ref EntityQuery, void*, void*, void> Rotate 
+            => (delegate* unmanaged[Cdecl]<ref SystemState, ref EntityQuery, void*, void*, void>) data.Data.Rotate;
 }
 
 static class win32 {
@@ -177,13 +204,10 @@ partial struct odecs_setup_system : ISystem {
         state.EntityManager.CompleteDependencyBeforeRW<LocalTransform>();
         speedHandle.Update(ref state);
         transformHandle.Update(ref state);
-        Debug.Log(state.m_WorldUnmanaged.UpdateAllocator.ToAllocator);
-        var chunks = query.ToArchetypeChunkArray(state.WorldUpdateAllocator);
         odecs_calls.Rotate(
-            ref state, ref state.m_WorldUnmanaged, ref state.m_WorldUnmanaged.UpdateAllocator,
+            ref state, ref query,
             UnsafeUtility.AddressOf(ref transformHandle), 
-            UnsafeUtility.AddressOf(ref speedHandle), 
-            (TimeData*)UnsafeUtility.AddressOf(ref state.WorldUnmanaged.Time));
+            UnsafeUtility.AddressOf(ref speedHandle));
     }
 
     public void OnDestroy(ref SystemState state) {

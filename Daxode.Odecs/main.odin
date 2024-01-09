@@ -17,6 +17,9 @@ functions_that_call_unity :: struct #packed {
     debugLog: proc "cdecl" (str: cstring, len: int),
     GetComponentDataROPtr: GetComponentDataPtr(byte),
     GetComponentDataRWPtr: GetComponentDataPtr(byte),
+    ToArchetypeChunkArray: proc "cdecl" (queryImpl: ^EntityQueryImpl, #by_ptr allocator: AllocatorManager_AllocatorHandle, array: ^NativeArray(ArchetypeChunk)),
+    SystemStateGlobalSystemVersion: proc "cdecl" (state: ^SystemState) -> u32,
+    GetASHForComponent: proc "cdecl" (state: ^SystemState, #by_ptr typeIndex: TypeIndex, isReadOnly: b8, ash: ^AtomicSafetyHandle)
 }
 
 GetComponentDataPtr :: struct($T: typeid) {
@@ -31,14 +34,30 @@ LookupCache :: struct #packed
     IndexInArchetype: i16,
 }
 
-ComponentTypeHandle :: struct($T: typeid) #packed
-{
-    m_LookupCache: LookupCache,
-    m_TypeIndex: TypeIndex,
-    m_SizeInChunk: i32,
-    m_GlobalSystemVersion: u32,
-    m_IsReadOnly: byte,
-    m_IsZeroSized: byte,
+when COLLECTION_CHECKS {
+    ComponentTypeHandle :: struct($T: typeid) #packed
+    {
+        m_LookupCache: LookupCache,
+        m_TypeIndex: TypeIndex,
+        m_SizeInChunk: i32,
+        m_GlobalSystemVersion: u32,
+        m_IsReadOnly: b8,
+        m_IsZeroSized: b8,
+        m_Length: i32,
+        m_MinIndex, m_MaxIndex: i32,
+        m_Safety: AtomicSafetyHandle
+    }
+} else {
+    ComponentTypeHandle :: struct($T: typeid) #packed
+    {
+        m_LookupCache: LookupCache,
+        m_TypeIndex: TypeIndex,
+        m_SizeInChunk: i32,
+        m_GlobalSystemVersion: u32,
+        m_IsReadOnly: byte,
+        m_IsZeroSized: byte,
+        m_Length: i32,
+    }
 }
 
 TypeIndex :: distinct i32
@@ -275,9 +294,11 @@ WorldFlags :: bit_set[WorldFlag; u64]
 EntityQuery :: struct #packed
 {
     __safety: AtomicSafetyHandle,
-    __impl: rawptr,
+    __impl: ^EntityQueryImpl,
     __seqno: u64,
 }
+
+EntityQueryImpl :: distinct rawptr // TODO: MAKE ACTUAL DON"T USE TYPE
 
 UnsafeList :: struct($T: typeid) #packed
 {
@@ -355,27 +376,37 @@ GetComponentDataROPtr :: proc (archChunk: ^ArchetypeChunk, typeHandle: ^Componen
     return (transmute(GetComponentDataPtr(T))(unity_funcs.GetComponentDataROPtr)).func(archChunk, typeHandle)[:archChunk.m_Chunk.Count]
 }
 
-GetWorldUpdateAllocator :: proc "contextless" (state: ^SystemState) -> Allocator
+GetWorldUpdateAllocator :: proc "contextless" (state: ^SystemState) -> AllocatorManager_AllocatorHandle
 {
-    return ToAllocator(state.m_WorldUnmanaged.m_Impl.DoubleUpdateAllocators.Pointer.m_handle)
+    return state.m_WorldUnmanaged.m_Impl.DoubleUpdateAllocators.Pointer.m_handle
+}
+
+Update :: proc "contextless" (using handle: ^ComponentTypeHandle($T), state: ^SystemState) 
+{
+    when COLLECTION_CHECKS {
+        unity_funcs.GetASHForComponent(state, m_TypeIndex, m_IsReadOnly, &m_Safety)
+    }
+    m_GlobalSystemVersion = unity_funcs.SystemStateGlobalSystemVersion(state)
 }
 
 @export
-Rotate :: proc "c" (state: ^SystemState, world: ^WorldUnmanaged, alloc: ^RewindableAllocator, transform_handle: ^ComponentTypeHandle(LocalTransform), spinspeed_handle: ^ComponentTypeHandle(SpinSpeed), time: ^TimeData)
+Rotate :: proc "c" (state: ^SystemState, query: ^EntityQuery, transform_handle: ^ComponentTypeHandle(LocalTransform), spinspeed_handle: ^ComponentTypeHandle(SpinSpeed))
 {
     context = odecs_context
-    worldUpdateAllocator := GetWorldUpdateAllocator(state)
-    log.debug(worldUpdateAllocator)
-    
-    // for &chunk in chunks.m_Buffer[:chunks.m_Length]{
-    //     transforms := GetComponentDataRWPtr(&chunk, transform_handle)
-    //     spinspeeds := GetComponentDataROPtr(&chunk, spinspeed_handle)
-    //     for &transform, i in transforms
-    //     {
-    //         transform.Rotation *= RotateY(time.DeltaTime * spinspeeds[i].radiansPerSecond);
-    //         transform.Position.y = math.sin(f32(time.ElapsedTime));
-    //     }
-    // }
+    time := state.m_WorldUnmanaged.m_Impl.CurrentTime;
+    Update(transform_handle, state)
+    Update(spinspeed_handle, state)
+    chunks: NativeArray(ArchetypeChunk)
+    unity_funcs.ToArchetypeChunkArray(query.__impl, GetWorldUpdateAllocator(state), &chunks)
+    for &chunk in chunks.m_Buffer[:chunks.m_Length]{
+        transforms := GetComponentDataRWPtr(&chunk, transform_handle)
+        spinspeeds := GetComponentDataROPtr(&chunk, spinspeed_handle)
+        for &transform, i in transforms
+        {
+            transform.Rotation *= RotateY(time.DeltaTime * spinspeeds[i].radiansPerSecond);
+            transform.Position.y = math.sin(f32(time.ElapsedTime));
+        }
+    }
 }
 
 RotateY :: proc "contextless" (angle: f32) -> quaternion128
