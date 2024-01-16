@@ -10,32 +10,26 @@ import "core:strconv"
 import "core:strings"
 import "core:os"
 import "core:intrinsics"
+import "core:fmt"
 
 odecs_context: runtime.Context
 
 functions_that_call_unity :: struct #packed {
     debugLog: proc "cdecl" (str: cstring, len: int),
-    GetComponentDataROPtr: GetComponentDataPtr(byte),
-    GetComponentDataRWPtr: GetComponentDataPtr(byte),
     ToArchetypeChunkArray: proc "cdecl" (queryImpl: ^EntityQueryImpl, #by_ptr allocator: AllocatorManager_AllocatorHandle, array: ^NativeArray(ArchetypeChunk)),
-    SystemStateGlobalSystemVersion: proc "cdecl" (state: ^SystemState) -> u32,
-    GetASHForComponent: proc "cdecl" (state: ^SystemState, #by_ptr typeIndex: TypeIndex, isReadOnly: b8, ash: ^AtomicSafetyHandle)
+    GetASHForComponent: proc "cdecl" (state: ^SystemState, typeIndex: ^TypeIndex, isReadOnly: u8, ash: ^AtomicSafetyHandle)
 }
 
-GetComponentDataPtr :: struct($T: typeid) {
-    func: proc "cdecl" (archChunk: ^ArchetypeChunk, typeHandle: ^ComponentTypeHandle(T)) -> [^]T
-}
-
-LookupCache :: struct #packed
+LookupCache :: struct #align(8)
 {
-    Archetype: rawptr,
+    Archetype: ^Archetype,
     ComponentOffset: i32,
     ComponentSizeOf: u16,
     IndexInArchetype: i16,
 }
 
 when COLLECTION_CHECKS {
-    ComponentTypeHandle :: struct($T: typeid) #packed
+    ComponentTypeHandleRaw :: struct #align(8)
     {
         m_LookupCache: LookupCache,
         m_TypeIndex: TypeIndex,
@@ -43,21 +37,27 @@ when COLLECTION_CHECKS {
         m_GlobalSystemVersion: u32,
         m_IsReadOnly: b8,
         m_IsZeroSized: b8,
+        _: [2]u8,
         m_Length: i32,
         m_MinIndex, m_MaxIndex: i32,
         m_Safety: AtomicSafetyHandle
     }
 } else {
-    ComponentTypeHandle :: struct($T: typeid) #packed
+    ComponentTypeHandleRaw :: struct #align(8)
     {
         m_LookupCache: LookupCache,
         m_TypeIndex: TypeIndex,
         m_SizeInChunk: i32,
         m_GlobalSystemVersion: u32,
-        m_IsReadOnly: byte,
-        m_IsZeroSized: byte,
+        m_IsReadOnly: b8,
+        m_IsZeroSized: b8,
+        _: [2]u8,
         m_Length: i32,
     }
+}
+
+ComponentTypeHandle :: struct($T: typeid) {
+    using val: ComponentTypeHandleRaw
 }
 
 TypeIndex :: distinct i32
@@ -65,15 +65,15 @@ SystemTypeIndex :: distinct i32
 
 ArchetypeChunk :: struct #packed {
     m_Chunk: ^Chunk,
-    m_EntityComponentStore: rawptr
+    m_EntityComponentStore: ^EntityComponentStore
 }
 
 Entity :: struct #packed {
     identifier, version: i32
 }
 
-Chunk :: struct #packed {
-    Archetype: rawptr,
+Chunk :: struct #align(8) {
+    Archetype: ^Archetype,
     metaChunkEntity: Entity,
     Count: i32,
     Capacity: i32,
@@ -81,8 +81,148 @@ Chunk :: struct #packed {
     ListWithEmptySlotsIndex: i32,
     Flags: u32,
     ChunkstoreIndex: i32,
-    SequenceNumber: u64
+    SequenceNumber: u64,
+    Buffer: [8]u8, // <Buffer>e__FixedBuffer
+} // total: 72
+
+
+AccessMode :: enum
+{
+    ReadWrite,
+    ReadOnly,
+    Exclude
 }
+
+ComponentTypeInArchetype :: struct #align(4)
+{
+    TypeIndex: TypeIndex, // TypeIndex
+} // total: 4
+
+ArchetypeChunkData :: struct #align(8)
+{
+    p: [^]^Chunk, // Chunk**
+    Capacity: i32, // Int32
+    Count: i32, // Int32
+    SharedComponentCount: i32, // Int32
+    ComponentCount: i32, // Int32
+} // total: 24
+
+
+Archetype :: struct #align(8)
+{
+    Chunks: ArchetypeChunkData, // ArchetypeChunkData
+    ChunksWithEmptySlots: [3]u64, // UnsafePtrList`1
+    FreeChunksBySharedComponents: [7]u64, // ChunkListMap
+    Types: [^]ComponentTypeInArchetype, // ComponentTypeInArchetype*
+    EnableableTypeIndexInArchetype: ^i32, // Int32*
+    MatchingQueryData: UnsafeList(rawptr), // UnsafeList<EntityQueryData*>
+    NextChangedArchetype: ^Archetype, // Archetype*
+    EntityCount: i32, // Int32
+    ChunkCapacity: i32, // Int32
+    TypesCount: i32, // Int32
+    EnableableTypesCount: i32, // Int32
+    InstanceSize: i32, // Int32
+    InstanceSizeWithOverhead: i32, // Int32
+    ScalarEntityPatchCount: i32, // Int32
+    BufferEntityPatchCount: i32, // Int32
+    StableHash: u64, // UInt64
+    TypeMemoryOrderIndexToIndexInArchetype: ^i32, // Int32*
+    TypeIndexInArchetypeToMemoryOrderIndex: ^i32, // Int32*
+    Offsets: [^]i32, // Int32*
+    SizeOfs: [^]u16, // UInt16*
+    BufferCapacities: [^]i32, // Int32*
+    FirstBufferComponent: i16, // Int16
+    FirstManagedComponent: i16, // Int16
+    FirstTagComponent: i16, // Int16
+    FirstSharedComponent: i16, // Int16
+    FirstChunkComponent: i16, // Int16
+    Flags: [1]u32, // ArchetypeFlags
+    CopyArchetype: ^Archetype, // Archetype*
+    InstantiateArchetype: ^Archetype, // Archetype*
+    CleanupResidueArchetype: ^Archetype, // Archetype*
+    MetaChunkArchetype: ^Archetype, // Archetype*
+    ScalarEntityPatches: rawptr, // EntityPatchInfo*
+    BufferEntityPatches: rawptr, // BufferEntityPatchInfo*
+    EntityComponentStore: ^EntityComponentStore, // EntityComponentStore*
+    QueryMaskArray: [16]u64, // <QueryMaskArray>e__FixedBuffer
+} // total: 432
+
+
+ComponentType :: struct {
+    TypeIndex: TypeIndex,
+    AccessModeType: AccessMode    
+}
+
+SharedComponentInfo :: struct 
+{
+    RefCount: i32,
+    ComponentType: i32,
+    Version: i32,
+    HashCode: i32,
+}
+
+ComponentTypeList :: struct
+{
+    Ptr: rawptr,
+    Length: i32,
+    Capacity: i32,
+    Allocator: AllocatorManager_AllocatorHandle,
+}
+
+EntityComponentStore :: struct #align(8)
+{
+    m_VersionByEntity: ^i32, // Int32*
+    m_ArchetypeByEntity: ^^Archetype, // Archetype**
+    m_EntityInChunkByEntity: rawptr, // EntityInChunk*
+    m_ComponentTypeOrderVersion: ^i32, // Int32*
+    m_ArchetypeChunkAllocator: [12]u64, // BlockAllocator
+    m_Archetypes: [3]u64, // UnsafePtrList`1
+    m_TypeLookup: [7]u64, // ArchetypeListMap
+    m_ManagedComponentIndex: i32, // Int32
+    m_ManagedComponentIndexCapacity: i32, // Int32
+    m_ManagedComponentFreeIndex: [3]u64, // UnsafeAppendBuffer
+    ManagedChangesTracker: [4]u64, // ManagedDeferredCommands
+    m_SharedComponentVersion: i32, // Int32
+    m_SharedComponentGlobalVersion: i32, // Int32
+    m_UnmanagedSharedComponentCount: i32, // Int32
+    _: [4]u8,
+    m_UnmanagedSharedComponentsByType: UnsafeList(ComponentTypeList), // UnsafeList`1
+    m_UnmanagedSharedComponentTypes: UnsafeList(TypeIndex), // UnsafeList`1
+    m_UnmanagedSharedComponentInfo: UnsafeList(UnsafeList(SharedComponentInfo)), // UnsafeList`1
+    m_HashLookup: UnsafeParallelMultiHashMap(u64, i32), // UnsafeParallelMultiHashMap`2
+    m_ChunkListChangesTracker: u64, // ChunkListChanges
+    m_WorldSequenceNumber: u64, // UInt64
+    m_NextChunkSequenceNumber: u64, // UInt64
+    m_NextFreeEntityIndex: i32, // Int32
+    m_EntityCreateDestroyVersion: i32, // Int32
+    m_GlobalSystemVersion: u32, // UInt32
+    m_EntitiesCapacity: i32, // Int32
+    m_IntentionallyInconsistent: i32, // Int32
+    m_ArchetypeTrackingVersion: u32, // UInt32
+    m_LinkedGroupType: TypeIndex, // TypeIndex
+    m_ChunkHeaderType: TypeIndex, // TypeIndex
+    m_PrefabType: TypeIndex, // TypeIndex
+    m_CleanupEntityType: TypeIndex, // TypeIndex
+    m_DisabledType: TypeIndex, // TypeIndex
+    m_EntityType: TypeIndex, // TypeIndex
+    m_SystemInstanceType: TypeIndex, // TypeIndex
+    m_ChunkHeaderComponentType: ComponentType, // ComponentType
+    m_EntityComponentType: ComponentType, // ComponentType
+    m_SimulateComponentType: ComponentType, // ComponentType
+    m_TypeInfos: rawptr, // TypeInfo*
+    m_EntityOffsetInfos: rawptr, // EntityOffsetInfo*
+    m_DebugOnlyManagedAccess: i32, // Int32
+    memoryInitPattern: b8, // Byte
+    useMemoryInitPattern: b8, // Byte
+    m_RecordToJournal: b8, // Byte
+    _: [1]u8,
+    m_StructuralChangesRecorder: rawptr, // Recorder*
+    m_NameByEntity: ^EntityName, // EntityName*
+    m_NameChangeBitsSequenceNum: u64, // UInt64
+    m_NameChangeBitsByEntity: [3]u64, // UnsafeBitArray
+} // total: 552
+
+EntityName :: distinct i32
 
 COLLECTION_CHECKS :: true
 
@@ -118,7 +258,7 @@ SystemState :: struct #align(4)
     m_JobHandle: JobHandle,
     m_Flags: u64,
     m_DependencyManager: rawptr,
-    m_EntityComponentStore: rawptr,
+    m_EntityComponentStore: ^EntityComponentStore,
     m_LastSystemVersion: u64,
     m_ProfilerMarker, m_ProfilerMarkerBurst: ProfilerMarker,
     m_Self: rawptr,
@@ -366,27 +506,23 @@ SpinSpeed :: struct {
     radiansPerSecond : c.float
 }
 
-GetComponentDataRWPtr :: proc (archChunk: ^ArchetypeChunk, typeHandle: ^ComponentTypeHandle($T)) -> []T
-{
-    return (transmute(GetComponentDataPtr(T))(unity_funcs.GetComponentDataRWPtr)).func(archChunk, typeHandle)[:archChunk.m_Chunk.Count]
-}
-
-GetComponentDataROPtr :: proc (archChunk: ^ArchetypeChunk, typeHandle: ^ComponentTypeHandle($T)) -> []T
-{
-    return (transmute(GetComponentDataPtr(T))(unity_funcs.GetComponentDataROPtr)).func(archChunk, typeHandle)[:archChunk.m_Chunk.Count]
-}
-
 GetWorldUpdateAllocator :: proc "contextless" (state: ^SystemState) -> AllocatorManager_AllocatorHandle
 {
     return state.m_WorldUnmanaged.m_Impl.DoubleUpdateAllocators.Pointer.m_handle
 }
 
-Update :: proc "contextless" (using handle: ^ComponentTypeHandle($T), state: ^SystemState) 
+Update :: proc (handle: ^ComponentTypeHandle($T), state: ^SystemState) 
 {
     when COLLECTION_CHECKS {
-        unity_funcs.GetASHForComponent(state, m_TypeIndex, m_IsReadOnly, &m_Safety)
+        unity_funcs.GetASHForComponent(state, &handle.m_TypeIndex, u8(handle.m_IsReadOnly), &handle.m_Safety)
     }
-    m_GlobalSystemVersion = unity_funcs.SystemStateGlobalSystemVersion(state)
+    handle.m_GlobalSystemVersion = state.m_EntityComponentStore.m_GlobalSystemVersion
+}
+
+ToArchetypeChunkArray :: proc "contextless" (query: ^EntityQuery, allocator: AllocatorManager_AllocatorHandle) -> []ArchetypeChunk {
+    chunks: NativeArray(ArchetypeChunk)
+    unity_funcs.ToArchetypeChunkArray(query.__impl, allocator, &chunks)
+    return chunks.m_Buffer[:chunks.m_Length]
 }
 
 @export
@@ -396,21 +532,121 @@ Rotate :: proc "c" (state: ^SystemState, query: ^EntityQuery, transform_handle: 
     time := state.m_WorldUnmanaged.m_Impl.CurrentTime;
     Update(transform_handle, state)
     Update(spinspeed_handle, state)
-    chunks: NativeArray(ArchetypeChunk)
-    unity_funcs.ToArchetypeChunkArray(query.__impl, GetWorldUpdateAllocator(state), &chunks)
-    for &chunk in chunks.m_Buffer[:chunks.m_Length]{
-        transforms := GetComponentDataRWPtr(&chunk, transform_handle)
-        spinspeeds := GetComponentDataROPtr(&chunk, spinspeed_handle)
+    
+    chunks := ToArchetypeChunkArray(query, GetWorldUpdateAllocator(state))
+    for &chunk in chunks {
+        transforms := Chunk_GetComponentDataRW(&chunk, transform_handle)
+        spinspeeds := Chunk_GetComponentDataRO(&chunk, spinspeed_handle)
         for &transform, i in transforms
         {
             transform.Rotation *= RotateY(time.DeltaTime * spinspeeds[i].radiansPerSecond);
             transform.Position.y = math.sin(f32(time.ElapsedTime));
         }
     }
-}
+} 
 
 RotateY :: proc "contextless" (angle: f32) -> quaternion128
 {
     sina, cosa := math.sincos(0.5 * angle);
     return quaternion(sina, 0.0, cosa, 0.0);
+}
+
+main :: proc() {
+    fmt.println(align_of(EntityComponentStore), size_of(EntityComponentStore))
+}
+
+
+Chunk_GetComponentDataRW :: proc (archChunk: ^ArchetypeChunk, typeHandle: ^ComponentTypeHandle($T)) -> []T {
+    return (transmute([^]T)ChunkDataUtility_GetOptionalComponentDataWithTypeRW(archChunk.m_Chunk, archChunk.m_Chunk.Archetype,
+        0, typeHandle.m_TypeIndex,
+        typeHandle.m_GlobalSystemVersion, &typeHandle.m_LookupCache))[:archChunk.m_Chunk.Count];
+}
+
+ChunkDataUtility_GetOptionalComponentDataWithTypeRW :: proc(chunk: ^Chunk, archetype: ^Archetype, baseEntityIndex: i32, typeIndex: TypeIndex, globalSystemVersion: u32, lookupCache: ^LookupCache) -> [^]u8
+{
+    if (lookupCache.Archetype != archetype) {
+        LookupCache_Update(lookupCache, archetype, typeIndex);
+    }
+    if (lookupCache.IndexInArchetype == -1){
+        return nil;
+    }
+
+    // Write Component to Chunk. ChangeVersion:Yes OrderVersion:No
+    Chunk_SetChangeVersion(chunk, i32(lookupCache.IndexInArchetype), globalSystemVersion);
+    return &(transmute([^]u8)chunk)[64 + lookupCache.ComponentOffset + i32(lookupCache.ComponentSizeOf) * baseEntityIndex];
+}
+
+Chunk_GetComponentDataRO :: proc (archChunk: ^ArchetypeChunk, typeHandle: ^ComponentTypeHandle($T)) -> []T {
+    return (transmute([^]T)ChunkDataUtility_GetOptionalComponentDataWithTypeRO(archChunk.m_Chunk, archChunk.m_Chunk.Archetype,
+        0, typeHandle.m_TypeIndex,
+        typeHandle.m_GlobalSystemVersion, &typeHandle.m_LookupCache))[:archChunk.m_Chunk.Count];
+}
+
+ChunkDataUtility_GetOptionalComponentDataWithTypeRO :: proc(chunk: ^Chunk, archetype: ^Archetype, baseEntityIndex: i32, typeIndex: TypeIndex, globalSystemVersion: u32, lookupCache: ^LookupCache) -> [^]u8
+{
+    if (lookupCache.Archetype != archetype){
+        LookupCache_Update(lookupCache, archetype, typeIndex);
+    }
+    if (lookupCache.IndexInArchetype == -1){
+        return nil;
+    }
+    
+    return &(transmute([^]u8)chunk)[64 + lookupCache.ComponentOffset + i32(lookupCache.ComponentSizeOf) * baseEntityIndex];
+}
+
+Chunk_SetChangeVersion :: proc (using self: ^Chunk, indexInArchetype: i32, version: u32)
+{
+    Chunks_SetChangeVersion(&Archetype.Chunks, indexInArchetype, ListIndex, version);
+}
+
+Chunks_SetChangeVersion :: proc (using self: ^ArchetypeChunkData, indexInArchetype: i32, chunkIndex: i32, version: u32)
+{
+    changeVersions := GetChangeVersionArrayForType(self, indexInArchetype);
+    changeVersions[chunkIndex] = version;
+}
+ENABLE_UNITY_COLLECTIONS_CHECKS::COLLECTION_CHECKS
+UNITY_DOTS_DEBUG :: COLLECTION_CHECKS
+
+GetChangeVersionArrayForType :: proc (using self: ^ArchetypeChunkData, indexInArchetype: i32) -> [^]u32
+{
+    when ENABLE_UNITY_COLLECTIONS_CHECKS || UNITY_DOTS_DEBUG {
+        assert(indexInArchetype >= 0 && indexInArchetype < ComponentCount,
+            "out-of-range indexInArchetype passed to GetChangeVersionArrayForType");
+    }
+
+    changeVersions := &p[Capacity];
+    return &(transmute([^]u32)changeVersions)[indexInArchetype * Capacity];
+}
+
+
+LookupCache_Update :: proc(using cache: ^LookupCache, archetype: ^Archetype, typeIndex: TypeIndex)
+{
+    GetIndexInTypeArray(archetype, typeIndex, &IndexInArchetype);
+    ComponentOffset = IndexInArchetype == -1 ? 0 : archetype.Offsets[IndexInArchetype];
+    ComponentSizeOf = IndexInArchetype == -1 ? u16(0) : archetype.SizeOfs[IndexInArchetype];
+    Archetype = archetype;
+}
+
+GetIndexInTypeArray :: proc (archetype: ^Archetype, typeIndex: TypeIndex, typeLookupCache: ^i16)
+{
+    types := archetype.Types;
+    typeCount := archetype.TypesCount;
+
+    if (typeLookupCache^ >= 0 
+        && typeLookupCache^ < i16(typeCount) 
+        && types[typeLookupCache^].TypeIndex == typeIndex) {
+        return;
+    }
+
+    for type, i in types[:typeCount]
+    {
+        if (typeIndex != type.TypeIndex) {
+            continue;
+        }
+
+        typeLookupCache^ = i16(i);
+        return;
+    }
+
+    typeLookupCache^ = i16(-1);
 }

@@ -60,84 +60,59 @@ unsafe static class odecs_calls {
     [BurstCompile]
     struct FunctionsToCallFromOdin {
         IntPtr debugLog;
-        IntPtr chunkGetComponentPtrRO;
-        IntPtr chunkGetComponentPtrRW;
         IntPtr entityQueryToArchetypeChunkArray;
-        IntPtr systemStateGlobalSystemVersion;
         IntPtr getASHForComponent;
         public void Init() {
             debugLog = BurstCompiler.CompileFunctionPointer<DebugLog>(Log).Value;
-            chunkGetComponentPtrRO = BurstCompiler.CompileFunctionPointer<GetComponentDataPtrFunc>(GetComponentDataPtrRO).Value;
-            chunkGetComponentPtrRW = BurstCompiler.CompileFunctionPointer<GetComponentDataPtrFunc>(GetComponentDataPtrRW).Value;
             entityQueryToArchetypeChunkArray = BurstCompiler.CompileFunctionPointer<ToArchetypeChunkArrayFunc>(ToArchetypeChunkArray).Value;
-            systemStateGlobalSystemVersion = BurstCompiler.CompileFunctionPointer<SystemStateGlobalSystemVersionFunc>(SystemStateGlobalSystemVersion).Value;
             getASHForComponent = BurstCompiler.CompileFunctionPointer<GetASHForComponentFunc>(GetASHForComponent).Value;
         }
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        unsafe delegate byte* GetComponentDataPtrFunc(ArchetypeChunk* archChunk, ref ComponentTypeHandle<byte> typeHandle);
-        
-        [BurstCompile]
-        [MonoPInvokeCallback(typeof(GetComponentDataPtrFunc))]
-        static byte* GetComponentDataPtrRO(ArchetypeChunk* archChunk, ref ComponentTypeHandle<byte> typeHandle)
+        [StructLayout(LayoutKind.Sequential)]
+        struct ComponentTypeHandleRaw
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
-            AtomicSafetyHandle.CheckReadAndThrow(typeHandle.m_Safety);
-#endif
-
-            // This updates the type handle's cache as a side effect, which will tell us if the archetype has the component
-            // or not.
-            return ChunkDataUtility.GetOptionalComponentDataWithTypeRO(archChunk->m_Chunk, archChunk->m_Chunk->Archetype, 0,
-                typeHandle.m_TypeIndex, ref typeHandle.m_LookupCache);
-        }
-        
-        [BurstCompile]
-        [MonoPInvokeCallback(typeof(GetComponentDataPtrFunc))]
-        static byte* GetComponentDataPtrRW(ArchetypeChunk* archChunk, ref ComponentTypeHandle<byte> typeHandle)
-        {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
-            AtomicSafetyHandle.CheckWriteAndThrow(typeHandle.m_Safety);
-#endif
-#if ENABLE_UNITY_COLLECTIONS_CHECKS || UNITY_DOTS_DEBUG
-            if (Hint.Unlikely(typeHandle.IsReadOnly))
-                throw new InvalidOperationException(
-                    "Provided ComponentTypeHandle is read-only; can't get a read/write pointer to component data");
-#endif
-
-            byte* ptr = ChunkDataUtility.GetOptionalComponentDataWithTypeRW(archChunk->m_Chunk, archChunk->m_Chunk->Archetype,
-                0, typeHandle.m_TypeIndex,
-                typeHandle.GlobalSystemVersion, ref typeHandle.m_LookupCache);
-
-#if (UNITY_EDITOR || DEVELOPMENT_BUILD) && !DISABLE_ENTITIES_JOURNALING
-            if (Hint.Unlikely(archChunk->m_EntityComponentStore->m_RecordToJournal != 0))
-                archChunk->JournalAddRecordGetComponentDataRW(ref typeHandle, ptr,
-                    typeHandle.m_LookupCache.ComponentSizeOf * archChunk->Count);
-#endif
-
-            return ptr;
+            public LookupCache m_LookupCache;
+            public TypeIndex m_TypeIndex;
+            public int m_SizeInChunk;
+            public uint m_GlobalSystemVersion;
+            public byte m_IsReadOnly;
+            public byte m_IsZeroSized;
+            public int m_Length;
+            public int m_MinIndex; 
+            public int m_MaxIndex;
+            public AtomicSafetyHandle m_Safety;
+            public readonly bool IsReadOnly => m_IsReadOnly == 1;
         }
 
+
+        static void JournalAddRecordGetComponentDataRW(ArchetypeChunk* archetypeChunk, ComponentTypeHandleRaw* typeHandle, void* data, int dataLength){
+                EntitiesJournaling.AddRecord(
+                    recordType: EntitiesJournaling.RecordType.GetComponentDataRW,
+                    entityComponentStore: archetypeChunk->m_EntityComponentStore,
+                    globalSystemVersion: typeHandle->m_GlobalSystemVersion,
+                    chunks: archetypeChunk,
+                    chunkCount: 1,
+                    types: (TypeIndex*)UnsafeUtility.AddressOf(ref typeHandle->m_TypeIndex),
+                    typeCount: 1,
+                    data: data,
+                    dataLength: dataLength);
+        } 
+
+        // EntityQueryImpl.ToArchetypeChunkArray
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         unsafe delegate void ToArchetypeChunkArrayFunc(EntityQueryImpl* queryImpl, AllocatorManager.AllocatorHandle* allocator, NativeArray<ArchetypeChunk>* array);
-
         [BurstCompile]
         [MonoPInvokeCallback(typeof(ToArchetypeChunkArrayFunc))]
         static void ToArchetypeChunkArray(EntityQueryImpl* queryImpl, AllocatorManager.AllocatorHandle* allocator, NativeArray<ArchetypeChunk>* array) => *array = queryImpl->ToArchetypeChunkArray(*allocator);
 
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        unsafe delegate uint SystemStateGlobalSystemVersionFunc(SystemState* state);
-
-        [BurstCompile]
-        [MonoPInvokeCallback(typeof(SystemStateGlobalSystemVersionFunc))]
-        static uint SystemStateGlobalSystemVersion(SystemState* state) => state->GlobalSystemVersion;
-
-
+        // state.m_DependencyManager->Safety.GetSafetyHandleForComponentTypeHandle
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         unsafe delegate void GetASHForComponentFunc(SystemState* state, TypeIndex* typeIndex, byte isReadOnly, AtomicSafetyHandle* ash);
         [BurstCompile]
         [MonoPInvokeCallback(typeof(GetASHForComponentFunc))]
         static void GetASHForComponent(SystemState* state, TypeIndex* typeIndex, byte isReadOnly, AtomicSafetyHandle* ash) => *ash = state->m_DependencyManager->Safety.GetSafetyHandleForComponentTypeHandle(*typeIndex, isReadOnly>0);
 
+        // Debug.Log
         unsafe struct FakeUntypedUnsafeList {
     #pragma warning disable 169
             [NativeDisableUnsafePtrRestriction]
@@ -196,14 +171,15 @@ partial struct odecs_setup_system : ISystem {
         query = SystemAPI.QueryBuilder().WithAll<SpinSpeed, LocalTransform>().Build();
     }
 
-    [BurstCompile]
+    //[BurstCompile]
     public unsafe void OnUpdate(ref SystemState state){
         if (Input.GetKey(KeyCode.Space))
             return;
 
         state.EntityManager.CompleteDependencyBeforeRW<LocalTransform>();
-        speedHandle.Update(ref state);
-        transformHandle.Update(ref state);
+        // PrintFieldOfType<AtomicSafetyHandle>();
+        // PrintFieldOfType<ArchetypeChunkData>();
+
         odecs_calls.Rotate(
             ref state, ref query,
             UnsafeUtility.AddressOf(ref transformHandle), 
@@ -212,5 +188,44 @@ partial struct odecs_setup_system : ISystem {
 
     public void OnDestroy(ref SystemState state) {
         odecs_calls.unload_calls();
+    }
+
+    static unsafe void PrintFieldOfType<T>() where T : unmanaged
+    {
+        var stringBuilder = new System.Text.StringBuilder();
+        var alignment = UnsafeUtility.AlignOf<T>();
+        stringBuilder.AppendLine($"{typeof(T).Name} :: struct #align({alignment})");
+        stringBuilder.AppendLine("{");
+        var fieldEnumerator = typeof(T)
+            .GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetEnumerator();
+        fieldEnumerator.MoveNext();
+        var field = (FieldInfo)fieldEnumerator.Current;
+        var previousOffset = UnsafeUtility.GetFieldOffset(field);
+        var previousName = field.Name;
+        var previousType = field.FieldType.Name;
+        while (fieldEnumerator.MoveNext())
+        {
+            field = (FieldInfo)fieldEnumerator.Current;
+            var currentOffset = UnsafeUtility.GetFieldOffset(field);
+            stringBuilder.AppendLine($"    {previousName}: {ReturnHighestForCurrentAlignment(alignment, currentOffset-previousOffset)}, // {previousType}");
+            previousOffset = currentOffset;
+            previousName = field.Name;
+            previousType = field.FieldType.Name;
+        }
+        stringBuilder.AppendLine($"    {previousName}: {ReturnHighestForCurrentAlignment(alignment, UnsafeUtility.SizeOf<T>()-previousOffset)}, // {previousType}");
+        stringBuilder.AppendLine($"}} // total: {UnsafeUtility.SizeOf<T>()}");
+        Debug.Log(stringBuilder.ToString());
+    }
+
+    static string ReturnHighestForCurrentAlignment(int alignment, int bytes){
+        if (bytes/8 > 0 && alignment >= 8){
+            return $"[{bytes/8}]u64";
+        } else if (bytes/4 > 0 && alignment >= 4){
+            return $"[{bytes/4}]u32";
+        } else if (bytes/2 > 0 && alignment >= 2){
+            return $"[{bytes/2}]u16";
+        } else {
+            return $"[{bytes}]u8";
+        }
     }
 }
