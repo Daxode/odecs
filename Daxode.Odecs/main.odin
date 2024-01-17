@@ -484,7 +484,20 @@ init :: proc "c" (funcs_that_call_unity: ^functions_that_call_unity) {
         options = {.Short_File_Path, .Line},
         procedure = proc(data: rawptr, level: runtime.Logger_Level, text: string, options: runtime.Logger_Options, location := #caller_location) {
             my_test := strings.clone_to_cstring(text)
-            unity_funcs.debugLog(my_test, len(my_test)+1)
+            switch level {
+                case .Debug:
+                    fallthrough
+                case .Info:
+                    unityLogPtr.Log(.Log, my_test, strings.clone_to_cstring(location.file_path), location.line)
+                case .Warning:
+                    unityLogPtr.Log(.Warning, my_test, strings.clone_to_cstring(location.file_path), location.line)
+                case .Error:
+                    unityLogPtr.Log(.Error, my_test, strings.clone_to_cstring(location.file_path), location.line)
+                case .Fatal:
+                    unityLogPtr.Log(.Exception, my_test, strings.clone_to_cstring(location.file_path), location.line)
+            }
+
+            //unity_funcs.debugLog(my_test, len(my_test)+1)
         },
     }
 }
@@ -525,6 +538,50 @@ ToArchetypeChunkArray :: proc "contextless" (query: ^EntityQuery, allocator: All
     return chunks.m_Buffer[:chunks.m_Length]
 }
 
+UnityLogType :: enum
+{
+    Error = 0,
+    Warning = 2,
+    Log = 3,
+    Exception = 4,
+}
+
+IUnityLog :: struct
+{
+    Log: proc "stdcall" (type: UnityLogType, message, fileName: cstring, fileLine: i32),
+};
+
+IUnityInterface :: struct {}
+
+UnityInterfaceGUID :: struct
+{
+    m_GUIDHigh, m_GUIDLow: u64
+}
+
+IUnityInterfaces :: struct
+{
+    GetInterface: proc "stdcall" (guid: UnityInterfaceGUID) -> ^IUnityInterface,   
+    RegisterInterface: proc "stdcall" (guid: UnityInterfaceGUID, ptr: ^IUnityInterface),
+    GetInterfaceSplit: proc "stdcall" (guidHigh: u64, guidLow: u64) -> ^IUnityInterface,
+    RegisterInterfaceSplit: proc "stdcall" (guidHigh: u64, guidLow:u64, ptr: ^IUnityInterface),
+}
+
+IUnityLog_GUID :: UnityInterfaceGUID {0x9E7507fA5B444D5D, 0x92FB979515EA83FC};
+
+unityLogPtr: ^IUnityLog
+
+@export 
+UnityPluginLoad :: proc "stdcall" (unityInterfacesPtr: ^IUnityInterfaces)
+{
+    //Get the unity log pointer once the Unity plugin gets loaded
+    unityLogPtr = (^IUnityLog)(unityInterfacesPtr.GetInterface(IUnityLog_GUID))
+}
+
+@export 
+UnityPluginUnload :: proc "stdcall" () {
+    unityLogPtr = nil
+}
+
 @export
 Rotate :: proc "c" (state: ^SystemState, query: ^EntityQuery, transform_handle: ^ComponentTypeHandle(LocalTransform), spinspeed_handle: ^ComponentTypeHandle(SpinSpeed))
 {
@@ -534,6 +591,7 @@ Rotate :: proc "c" (state: ^SystemState, query: ^EntityQuery, transform_handle: 
     Update(spinspeed_handle, state)
     
     chunks := ToArchetypeChunkArray(query, GetWorldUpdateAllocator(state))
+    log.debug(chunks)
     for &chunk in chunks {
         transforms := Chunk_GetComponentDataRW(&chunk, transform_handle)
         spinspeeds := Chunk_GetComponentDataRO(&chunk, spinspeed_handle)

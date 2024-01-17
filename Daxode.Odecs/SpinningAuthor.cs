@@ -135,12 +135,14 @@ unsafe static class odecs_calls {
     }
 
     static FunctionsToCallFromOdin s_functionsToCallFromOdin;
-    public unsafe static void  init()
+    public unsafe static void  Init()
     {
         s_functionsToCallFromOdin.Init();
-        var odecs_init = (delegate* unmanaged[Cdecl]<ref FunctionsToCallFromOdin, void>) data.Data.init;
-        odecs_init(ref s_functionsToCallFromOdin);
+        init(UnsafeUtility.AddressOf(ref s_functionsToCallFromOdin));
     }
+
+    [DllImport("odecs")]
+    static extern void init(void* ptr);
 
     public static delegate* unmanaged[Cdecl]<ref SystemState, ref EntityQuery, void*, void*, void> Rotate 
             => (delegate* unmanaged[Cdecl]<ref SystemState, ref EntityQuery, void*, void*, void>) data.Data.Rotate;
@@ -165,13 +167,13 @@ partial struct odecs_setup_system : ISystem {
 
     public unsafe void OnCreate(ref SystemState state){
         odecs_calls.load_calls();
-        odecs_calls.init();
+        odecs_calls.Init();
         speedHandle = SystemAPI.GetComponentTypeHandle<SpinSpeed>(true);
         transformHandle = SystemAPI.GetComponentTypeHandle<LocalTransform>();
         query = SystemAPI.QueryBuilder().WithAll<SpinSpeed, LocalTransform>().Build();
     }
 
-    //[BurstCompile]
+    [BurstCompile]
     public unsafe void OnUpdate(ref SystemState state){
         if (Input.GetKey(KeyCode.Space))
             return;
