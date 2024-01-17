@@ -44,6 +44,7 @@ Rotate :: proc "c" (state: ^entities.SystemState, query: ^entities.EntityQuery, 
         {
             transform.Rotation *= RotateY(time.DeltaTime * spinspeeds[i].radiansPerSecond);
             transform.Position.y = math.sin(f32(time.ElapsedTime));
+            log.debug(transform, spinspeeds[i], time)
         }
     }
 } 
