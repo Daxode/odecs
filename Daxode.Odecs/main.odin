@@ -11,11 +11,14 @@ import "core:strings"
 import "core:os"
 import "core:intrinsics"
 import "core:fmt"
+import "core:dynlib"
 
+ENABLE_UNITY_COLLECTIONS_CHECKS :: #config(ENABLE_UNITY_COLLECTIONS_CHECKS, true)
+UNITY_DOTS_DEBUG :: #config(UNITY_DOTS_DEBUG, false)
 odecs_context: runtime.Context
 
 functions_that_call_unity :: struct #packed {
-    debugLog: proc "cdecl" (str: cstring, len: int),
+    odecs_context: ^runtime.Context,
     ToArchetypeChunkArray: proc "cdecl" (queryImpl: ^EntityQueryImpl, #by_ptr allocator: AllocatorManager_AllocatorHandle, array: ^NativeArray(ArchetypeChunk)),
     GetASHForComponent: proc "cdecl" (state: ^SystemState, typeIndex: ^TypeIndex, isReadOnly: u8, ash: ^AtomicSafetyHandle)
 }
@@ -28,7 +31,7 @@ LookupCache :: struct #align(8)
     IndexInArchetype: i16,
 }
 
-when COLLECTION_CHECKS {
+when ENABLE_UNITY_COLLECTIONS_CHECKS {
     ComponentTypeHandleRaw :: struct #align(8)
     {
         m_LookupCache: LookupCache,
@@ -224,9 +227,7 @@ EntityComponentStore :: struct #align(8)
 
 EntityName :: distinct i32
 
-COLLECTION_CHECKS :: true
-
-NativeArray :: struct($T: typeid) #packed where COLLECTION_CHECKS {
+NativeArray :: struct($T: typeid) #packed where ENABLE_UNITY_COLLECTIONS_CHECKS {
     m_Buffer : [^]T,
     m_Length : i32,
     m_MinIndex, m_MaxIndex: i32,
@@ -317,7 +318,7 @@ WorldUnmanagedImpl :: struct #packed
     
     m_AllowGetSystem: b8WhenCollectionChecks
 }
-b8WhenCollectionChecks :: b8 when COLLECTION_CHECKS else struct{}
+b8WhenCollectionChecks :: b8 when ENABLE_UNITY_COLLECTIONS_CHECKS else struct{}
 
 StateAllocator :: struct #packed
 {
@@ -479,27 +480,9 @@ unity_funcs: functions_that_call_unity
 @export
 init :: proc "c" (funcs_that_call_unity: ^functions_that_call_unity) {
     unity_funcs = funcs_that_call_unity^
-    odecs_context = runtime.default_context()
-    odecs_context.logger = {
-        options = {.Short_File_Path, .Line},
-        procedure = proc(data: rawptr, level: runtime.Logger_Level, text: string, options: runtime.Logger_Options, location := #caller_location) {
-            my_test := strings.clone_to_cstring(text)
-            switch level {
-                case .Debug:
-                    fallthrough
-                case .Info:
-                    unityLogPtr.Log(.Log, my_test, strings.clone_to_cstring(location.file_path), location.line)
-                case .Warning:
-                    unityLogPtr.Log(.Warning, my_test, strings.clone_to_cstring(location.file_path), location.line)
-                case .Error:
-                    unityLogPtr.Log(.Error, my_test, strings.clone_to_cstring(location.file_path), location.line)
-                case .Fatal:
-                    unityLogPtr.Log(.Exception, my_test, strings.clone_to_cstring(location.file_path), location.line)
-            }
-
-            //unity_funcs.debugLog(my_test, len(my_test)+1)
-        },
-    }
+    odecs_context = unity_funcs.odecs_context^
+    context = odecs_context
+    log.debug("Odecs has initialized succesfully")
 }
 
 LocalTransform :: struct
@@ -526,7 +509,7 @@ GetWorldUpdateAllocator :: proc "contextless" (state: ^SystemState) -> Allocator
 
 Update :: proc (handle: ^ComponentTypeHandle($T), state: ^SystemState) 
 {
-    when COLLECTION_CHECKS {
+    when ENABLE_UNITY_COLLECTIONS_CHECKS {
         unity_funcs.GetASHForComponent(state, &handle.m_TypeIndex, u8(handle.m_IsReadOnly), &handle.m_Safety)
     }
     handle.m_GlobalSystemVersion = state.m_EntityComponentStore.m_GlobalSystemVersion
@@ -538,50 +521,6 @@ ToArchetypeChunkArray :: proc "contextless" (query: ^EntityQuery, allocator: All
     return chunks.m_Buffer[:chunks.m_Length]
 }
 
-UnityLogType :: enum
-{
-    Error = 0,
-    Warning = 2,
-    Log = 3,
-    Exception = 4,
-}
-
-IUnityLog :: struct
-{
-    Log: proc "stdcall" (type: UnityLogType, message, fileName: cstring, fileLine: i32),
-};
-
-IUnityInterface :: struct {}
-
-UnityInterfaceGUID :: struct
-{
-    m_GUIDHigh, m_GUIDLow: u64
-}
-
-IUnityInterfaces :: struct
-{
-    GetInterface: proc "stdcall" (guid: UnityInterfaceGUID) -> ^IUnityInterface,   
-    RegisterInterface: proc "stdcall" (guid: UnityInterfaceGUID, ptr: ^IUnityInterface),
-    GetInterfaceSplit: proc "stdcall" (guidHigh: u64, guidLow: u64) -> ^IUnityInterface,
-    RegisterInterfaceSplit: proc "stdcall" (guidHigh: u64, guidLow:u64, ptr: ^IUnityInterface),
-}
-
-IUnityLog_GUID :: UnityInterfaceGUID {0x9E7507fA5B444D5D, 0x92FB979515EA83FC};
-
-unityLogPtr: ^IUnityLog
-
-@export 
-UnityPluginLoad :: proc "stdcall" (unityInterfacesPtr: ^IUnityInterfaces)
-{
-    //Get the unity log pointer once the Unity plugin gets loaded
-    unityLogPtr = (^IUnityLog)(unityInterfacesPtr.GetInterface(IUnityLog_GUID))
-}
-
-@export 
-UnityPluginUnload :: proc "stdcall" () {
-    unityLogPtr = nil
-}
-
 @export
 Rotate :: proc "c" (state: ^SystemState, query: ^EntityQuery, transform_handle: ^ComponentTypeHandle(LocalTransform), spinspeed_handle: ^ComponentTypeHandle(SpinSpeed))
 {
@@ -591,7 +530,6 @@ Rotate :: proc "c" (state: ^SystemState, query: ^EntityQuery, transform_handle: 
     Update(spinspeed_handle, state)
     
     chunks := ToArchetypeChunkArray(query, GetWorldUpdateAllocator(state))
-    log.debug(chunks)
     for &chunk in chunks {
         transforms := Chunk_GetComponentDataRW(&chunk, transform_handle)
         spinspeeds := Chunk_GetComponentDataRO(&chunk, spinspeed_handle)
@@ -662,8 +600,6 @@ Chunks_SetChangeVersion :: proc (using self: ^ArchetypeChunkData, indexInArchety
     changeVersions := GetChangeVersionArrayForType(self, indexInArchetype);
     changeVersions[chunkIndex] = version;
 }
-ENABLE_UNITY_COLLECTIONS_CHECKS::COLLECTION_CHECKS
-UNITY_DOTS_DEBUG :: COLLECTION_CHECKS
 
 GetChangeVersionArrayForType :: proc (using self: ^ArchetypeChunkData, indexInArchetype: i32) -> [^]u32
 {

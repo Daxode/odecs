@@ -11,7 +11,8 @@
         "Unity.Serialization",
         "Unity.Profiling.Core",
         "Unity.Transforms",
-        "Unity.Transforms.Hybrid"
+        "Unity.Transforms.Hybrid",
+        "Daxode.UnityInterfaceBridge"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
