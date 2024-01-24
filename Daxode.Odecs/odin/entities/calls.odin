@@ -9,7 +9,8 @@ unity_funcs: functions_that_call_unity
 functions_that_call_unity :: struct #packed {
     odecs_context: ^runtime.Context,
     ToArchetypeChunkArray: proc "cdecl" (queryImpl: ^EntityQueryImpl, #by_ptr allocator: collections.AllocatorManager_AllocatorHandle, array: ^collections.NativeArray(ArchetypeChunk)),
-    GetASHForComponent: proc "cdecl" (state: ^SystemState, typeIndex: ^TypeIndex, isReadOnly: u8, ash: ^collections.AtomicSafetyHandle)
+    GetASHForComponent: proc "cdecl" (state: ^SystemState, typeIndex: ^TypeIndex, isReadOnly: u8, ash: ^collections.AtomicSafetyHandle),
+    stableTypeHashToTypeIndex: ^collections.UnsafeParallelHashMap(u64, TypeIndex)
 }
 
 GetWorldUpdateAllocator :: proc "contextless" (state: ^SystemState) -> collections.AllocatorManager_AllocatorHandle
@@ -126,3 +127,150 @@ LookupCache_Update :: proc(using cache: ^LookupCache, archetype: ^Archetype, typ
     Archetype = archetype;
 }
 
+// GetStableHashFromType :: proc ($T: typeid)
+// {
+//     hash := HashTypeName(type);
+//     when !collections.UNITY_DOTSRUNTIME {
+//                 // UnityEngine objects have their own serialization mechanism so exclude hashing the type's
+//                 // internals and just hash its name+assemblyname (not fully qualified)
+//                 if (TypeManager.UnityEngineObjectType?.IsAssignableFrom(type) == true)
+//                 {
+//                     return CombineFNV1A64(hash, FNV1A64(type.Assembly.GetName().Name));
+//                 }
+
+//                 type_info_of(T).variant.(runtime.Type_Info_Named)
+//     }
+//                 if (type.IsGenericParameter || type.IsArray || type.IsPointer || type.IsPrimitive || type.IsEnum || WorkaroundTypes.Contains(type))
+//                     return hash;
+    
+//                 foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public))
+//                 {
+//                     if (!field.IsStatic) // statics have no effect on data layout
+//                     {
+//                         var fieldType = field.FieldType;
+    
+//                         if (!cache.TryGetValue(fieldType, out ulong fieldTypeHash))
+//                         {
+//                             // Classes can have cyclical type definitions so to prevent a potential stackoverflow
+//                             // we make all future occurence of fieldType resolve to the hash of its field type name
+//                             cache.Add(fieldType, HashTypeName(fieldType));
+//                             fieldTypeHash = HashType(fieldType, cache);
+//                             cache[fieldType] = fieldTypeHash;
+//                         }
+    
+//                         var fieldOffsetAttrs = field.GetCustomAttributes(typeof(FieldOffsetAttribute));
+//                         if (fieldOffsetAttrs.Any())
+//                         {
+//                             var offset = ((FieldOffsetAttribute)fieldOffsetAttrs.First()).Value;
+//                             hash = CombineFNV1A64(hash, (ulong)offset);
+//                         }
+    
+//                         hash = CombineFNV1A64(hash, fieldTypeHash);
+//                     }
+//                 }
+    
+//                 return hash;
+// }
+
+//         // http://www.isthe.com/chongo/src/fnv/hash_64a.c
+//         // with basis and prime:
+//         const ulong kFNV1A64OffsetBasis = 14695981039346656037;
+//         const ulong kFNV1A64Prime = 1099511628211;
+
+//         /// <summary>
+//         /// Generates a FNV1A64 hash.
+//         /// </summary>
+//         /// <param name="text">Text to hash.</param>
+//         /// <returns>Hash of input string.</returns>
+//         public static ulong FNV1A64(string text)
+//         {
+//             ulong result = kFNV1A64OffsetBasis;
+//             foreach (var c in text)
+//             {
+//                 result = kFNV1A64Prime * (result ^ (byte)(c & 255));
+//                 result = kFNV1A64Prime * (result ^ (byte)(c >> 8));
+//             }
+//             return result;
+//         }
+
+//         /// <summary>
+//         /// Generates a FNV1A64 hash.
+//         /// </summary>
+//         /// <param name="text">Text to hash.</param>
+//         /// <typeparam name="T">Unmanaged IUTF8 type.</typeparam>
+//         /// <returns>Hash of input string.</returns>
+//         public static ulong FNV1A64<T>(T text)
+//             where T : unmanaged, INativeList<byte>, IUTF8Bytes
+//         {
+//             ulong result = kFNV1A64OffsetBasis;
+//             for(int i = 0; i <text.Length; ++i)
+//             {
+//                 var c = text[i];
+//                 result = kFNV1A64Prime * (result ^ (byte)(c & 255));
+//                 result = kFNV1A64Prime * (result ^ (byte)(c >> 8));
+//             }
+//             return result;
+//         }
+
+//         /// <summary>
+//         /// Generates a FNV1A64 hash.
+//         /// </summary>
+//         /// <param name="val">Value to hash.</param>
+//         /// <returns>Hash of input.</returns>
+//         public static ulong FNV1A64(int val)
+//         {
+//             ulong result = kFNV1A64OffsetBasis;
+//             unchecked
+//             {
+//                 result = (((ulong)(val & 0x000000FF) >>  0) ^ result) * kFNV1A64Prime;
+//                 result = (((ulong)(val & 0x0000FF00) >>  8) ^ result) * kFNV1A64Prime;
+//                 result = (((ulong)(val & 0x00FF0000) >> 16) ^ result) * kFNV1A64Prime;
+//                 result = (((ulong)(val & 0xFF000000) >> 24) ^ result) * kFNV1A64Prime;
+//             }
+
+//             return result;
+//         }
+
+//         /// <summary>
+//         /// Combines a FNV1A64 hash with a value.
+//         /// </summary>
+//         /// <param name="hash">Input Hash.</param>
+//         /// <param name="value">Value to add to the hash.</param>
+//         /// <returns>A combined FNV1A64 hash.</returns>
+//         public static ulong CombineFNV1A64(ulong hash, ulong value)
+//         {
+//             hash ^= value;
+//             hash *= kFNV1A64Prime;
+
+//             return hash;
+//         }
+
+//         private static ulong HashNamespace(Type type)
+//         {
+//             var hash = kFNV1A64OffsetBasis;
+
+//             // System.Reflection and Cecil don't report namespaces the same way so do an alternative:
+//             // Find the namespace of an un-nested parent type, then hash each of the nested children names
+//             if (type.IsNested)
+//             {
+//                 hash = CombineFNV1A64(hash, HashNamespace(type.DeclaringType));
+//                 hash = CombineFNV1A64(hash, FNV1A64(type.DeclaringType.Name));
+//             }
+//             else if (!string.IsNullOrEmpty(type.Namespace))
+//                 hash = CombineFNV1A64(hash, FNV1A64(type.Namespace));
+
+//             return hash;
+//         }
+
+//         private static ulong HashTypeName(Type type)
+//         {
+//             ulong hash = HashNamespace(type);
+//             hash = CombineFNV1A64(hash, FNV1A64(type.Name));
+//             foreach (var ga in type.GenericTypeArguments)
+//             {
+//                 Assert.IsTrue(!ga.IsGenericParameter);
+//                 hash = CombineFNV1A64(hash, HashTypeName(ga));
+//             }
+
+//             return hash;
+//         }

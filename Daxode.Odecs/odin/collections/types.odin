@@ -72,9 +72,30 @@ UnsafeParallelMultiHashMap :: struct($TKey, $TValue: typeid)
     m_AllocatorLabel: AllocatorManager_AllocatorHandle
 }
 
+
+NativeParallelMultiHashMapIterator :: struct($TKey: typeid) {
+    key: TKey,
+    NextEntryIndex: i32,
+    EntryIndex: i32,
+}
+
+UnsafeParallelHashMapData :: struct #align(8)
+{
+    values: [^]u8, // Byte*
+    keys: [^]u8, // Byte*
+    next: [^]u8, // Byte*
+    buckets: [^]i32, // Byte*
+    keyCapacity: i32, // Int32
+    bucketCapacityMask: i32, // Int32
+    allocatedIndexLength: i32, // Int32
+    _: [1]u32, // padding
+    _: [2]u64, // padding
+    firstFreeTLS: [1024]u64, // <firstFreeTLS>e__FixedBuffer
+} // total: 8256
+
 UnsafeParallelHashMap :: struct($TKey, $TValue: typeid)
 {
-    m_Buffer: rawptr, // UnsafeParallelHashMapData*
+    m_Buffer: ^UnsafeParallelHashMapData, // UnsafeParallelHashMapData*
     m_AllocatorLabel: AllocatorManager_AllocatorHandle
 }
 

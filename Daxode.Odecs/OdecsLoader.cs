@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using Unity.Burst;
 using Unity.Collections;
@@ -33,6 +34,8 @@ unsafe static class odecs_calls {
                 loaded_lib = win32.LoadLibrary(Path.GetFullPath("Packages/odecs/Daxode.Odecs/out/odecs.dll")); // TODO: this won't work for builds and Unity Package Manager location
             init = win32.GetProcAddress(loaded_lib, "init");
             Rotate =  win32.GetProcAddress(loaded_lib, "Rotate");
+
+            stableTypeHashToTypeIndex = (UnsafeParallelHashMap<ulong, TypeIndex>) typeof(TypeManager).GetField("s_StableTypeHashToTypeIndex", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null);
         }
 
         public void unload_calls() {
@@ -44,7 +47,7 @@ unsafe static class odecs_calls {
         public IntPtr init;
         public IntPtr Rotate;
         public FunctionsToCallFromOdin functionsToCallFromOdin;
-
+        public UnsafeParallelHashMap<ulong, TypeIndex> stableTypeHashToTypeIndex;
         public bool IsLoaded => loaded_lib != IntPtr.Zero;
     }
 
@@ -75,7 +78,10 @@ unsafe static class odecs_calls {
         IntPtr odecsContext;
         IntPtr entityQueryToArchetypeChunkArray;
         IntPtr getASHForComponent;
+        public void* stableTypeHashToTypeIndex;
+
         public void Init() {
+            stableTypeHashToTypeIndex = UnsafeUtility.AddressOf(ref data.Data.stableTypeHashToTypeIndex);
             odecsContext = Daxode.UnityInterfaceBridge.OdecsUnityBridge.GetDefaultOdecsContext();
             entityQueryToArchetypeChunkArray = BurstCompiler.CompileFunctionPointer<ToArchetypeChunkArrayFunc>(ToArchetypeChunkArray).Value;
             getASHForComponent = BurstCompiler.CompileFunctionPointer<GetASHForComponentFunc>(GetASHForComponent).Value;

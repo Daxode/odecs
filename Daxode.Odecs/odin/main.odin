@@ -47,10 +47,19 @@ Rotate :: proc "c" (state: ^entities.SystemState, query: ^entities.EntityQuery, 
             log.debug(transform, spinspeeds[i], time)
         }
     }
+
+    
+    if typeindex, typeindex_ok := collections.TryGetValue(entities.unity_funcs.stableTypeHashToTypeIndex, u64(6655582417222636632)); typeindex_ok {
+        log.debug(typeindex)
+    }
+
+    if typeindex, typeindex_ok := collections.TryGetValue(entities.unity_funcs.stableTypeHashToTypeIndex, u64(1)); typeindex_ok {
+        log.debug(typeindex)
+    }
 } 
 
 RotateY :: proc "contextless" (angle: f32) -> quaternion128
 {
     sina, cosa := math.sincos(0.5 * angle);
-    return quaternion(sina, 0.0, cosa, 0.0);
+    return quaternion(w=sina, x=0.0, y=cosa, z=0.0);
 }
