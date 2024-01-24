@@ -8,6 +8,9 @@ using System.Reflection;
 using System;
 using System.Runtime.InteropServices;
 using Unity.Jobs.LowLevel.Unsafe;
+using UnityEngine.Assertions;
+using Unity.Collections;
+using System.Linq;
 
 public class SpinningAuthor : MonoBehaviour
 {
@@ -38,6 +41,16 @@ partial struct odecs_setup_system : ISystem {
         query = SystemAPI.QueryBuilder().WithAll<SpinSpeed, LocalTransform>().Build();
     }
 
+    void PrintStableTypeHash<T>() {
+        var type = typeof(T);
+        var memoryOrdering = TypeHash.CalculateMemoryOrdering(type, out var hasCustomMemoryOrder, null);
+        // The stable type hash is the same as the memory order if the user hasn't provided a custom memory ordering
+        var stableTypeHash = !hasCustomMemoryOrder ? memoryOrdering : TypeHash.CalculateStableTypeHash(type, null, null);
+        Debug.Log($"{typeof(T).Name}'s stable hash: {stableTypeHash}");
+        if (typeof(T).GetInterfaces().Any(v=>v.Name == "IComponentData"))
+            Debug.Log($"{typeof(T).Name}'s typeindex: {TypeManager.GetTypeIndex<T>().Value}");
+    }
+
     //[BurstCompile]
     public unsafe void OnUpdate(ref SystemState state){
         if (!odecs_calls.IsAvailable)
@@ -45,15 +58,12 @@ partial struct odecs_setup_system : ISystem {
 
         state.EntityManager.CompleteDependencyBeforeRW<LocalTransform>();
         //PrintFieldOfType<UnsafeParallelHashMapData>();
-        
-        var type = typeof(Entity);
-        var memoryOrdering = TypeHash.CalculateMemoryOrdering(type, out var hasCustomMemoryOrder, null);
-        // The stable type hash is the same as the memory order if the user hasn't provided a custom memory ordering
-        var stableTypeHash = !hasCustomMemoryOrder ? memoryOrdering : TypeHash.CalculateStableTypeHash(type, null, null);
-        Debug.Log(stableTypeHash);
-        Debug.Log(stableTypeHash.GetHashCode());
-        Debug.Log(TypeManager.GetTypeIndexFromStableTypeHash(stableTypeHash).Value);        
-        Debug.Log(TypeManager.GetTypeIndex<Entity>().Value);
+        PrintStableTypeHash<float>();
+        PrintStableTypeHash<float4>();
+        PrintStableTypeHash<float3>();
+        PrintStableTypeHash<quaternion>();
+        PrintStableTypeHash<LocalTransform>();
+        PrintStableTypeHash<SpinSpeed>();
 
         odecs_calls.Rotate(
             ref state, ref query,

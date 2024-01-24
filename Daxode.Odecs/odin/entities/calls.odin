@@ -127,150 +127,234 @@ LookupCache_Update :: proc(using cache: ^LookupCache, archetype: ^Archetype, typ
     Archetype = archetype;
 }
 
-// GetStableHashFromType :: proc ($T: typeid)
-// {
-//     hash := HashTypeName(type);
-//     when !collections.UNITY_DOTSRUNTIME {
-//                 // UnityEngine objects have their own serialization mechanism so exclude hashing the type's
-//                 // internals and just hash its name+assemblyname (not fully qualified)
-//                 if (TypeManager.UnityEngineObjectType?.IsAssignableFrom(type) == true)
-//                 {
-//                     return CombineFNV1A64(hash, FNV1A64(type.Assembly.GetName().Name));
-//                 }
 
-//                 type_info_of(T).variant.(runtime.Type_Info_Named)
-//     }
-//                 if (type.IsGenericParameter || type.IsArray || type.IsPointer || type.IsPrimitive || type.IsEnum || WorkaroundTypes.Contains(type))
-//                     return hash;
+GetStableHashFromType :: proc (T: typeid) -> u64
+{
+    // ulong versionHash = HashVersionAttribute(type, customAttributes);
+    typeHash := HashType(T);
+    return CombineFNV1A64(FNV1A64_i32(0), typeHash);
+}
+
+@private
+HashType :: proc (T: typeid) -> u64
+{
+    hashed_val := HashTypeName(T);
+    // when !collections.UNITY_DOTSRUNTIME {
+                // UnityEngine objects have their own serialization mechanism so exclude hashing the type's
+                // internals and just hash its name+assemblyname (not fully qualified)
+                // if (TypeManager.UnityEngineObjectType?.IsAssignableFrom(type))
+                // {
+                //     return CombineFNV1A64(hash, FNV1A64(type.Assembly.GetName().Name));
+                // }
+    // }
+
+
+
+    // if (type.IsGenericParameter || type.IsArray || type.IsPointer || type.IsPrimitive || type.IsEnum || WorkaroundTypes.Contains(type))
+    //     return hash;
+
+        
+    #partial switch info in type_info_of(T).variant
+    {
+        case runtime.Type_Info_Named:
+            structinfo, structinfo_ok := info.base.variant.(runtime.Type_Info_Struct);
+            if (structinfo_ok) {
+                for field_type in structinfo.types
+                {
+                    // if (!cache.TryGetValue(fieldType, out ulong fieldTypeHash))
+                        // {
+                            // Classes can have cyclical type definitions so to prevent a potential stackoverflow
+                            // we make all future occurence of fieldType resolve to the hash of its field type name
+                            // cache.Add(fieldType, HashTypeName(fieldType));
+                            fieldTypeHash := HashType(field_type.id);
+                            // cache[fieldType] = fieldTypeHash;
+                        // }
     
-//                 foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public))
-//                 {
-//                     if (!field.IsStatic) // statics have no effect on data layout
-//                     {
-//                         var fieldType = field.FieldType;
+                        // var fieldOffsetAttrs = field.GetCustomAttributes(typeof(FieldOffsetAttribute));
+                        // if (fieldOffsetAttrs.Any())
+                        // {
+                        //     var offset = ((FieldOffsetAttribute)fieldOffsetAttrs.First()).Value;
+                        //     hashed_val = CombineFNV1A64(hashed_val, (ulong)offset);
+                        // }
     
-//                         if (!cache.TryGetValue(fieldType, out ulong fieldTypeHash))
-//                         {
-//                             // Classes can have cyclical type definitions so to prevent a potential stackoverflow
-//                             // we make all future occurence of fieldType resolve to the hash of its field type name
-//                             cache.Add(fieldType, HashTypeName(fieldType));
-//                             fieldTypeHash = HashType(fieldType, cache);
-//                             cache[fieldType] = fieldTypeHash;
-//                         }
+                        hashed_val = CombineFNV1A64(hashed_val, fieldTypeHash);
+                }
+            } else {
+                log.info("doesn't need to recurse into" , info.pkg, info.name)
+            }
+    }
+
+    // return hash;
+    return hashed_val;
+}
+
+// http://www.isthe.com/chongo/src/fnv/hash_64a.c
+// with basis and prime:
+kFNV1A64OffsetBasis :u64: 14695981039346656037;
+kFNV1A64Prime :u64: 1099511628211;
+
+/// <summary>
+/// Generates a FNV1A64 hash.
+/// </summary>
+/// <param name="text">Text to hash.</param>
+/// <returns>Hash of input string.</returns>
+FNV1A64_str :: proc (text: string) -> u64
+{
+    result := kFNV1A64OffsetBasis;
+    for c in text
+    {
+        result = kFNV1A64Prime * (result ~ u64(c & 255));
+        result = kFNV1A64Prime * (result ~ u64(c >> 8));
+    }
+    return result;
+}
+
+/// <summary>
+/// Generates a FNV1A64 hash.
+/// </summary>
+/// <param name="val">Value to hash.</param>
+/// <returns>Hash of input.</returns>
+FNV1A64_i32 :: proc (val: i32) -> u64
+{
+    result: = kFNV1A64OffsetBasis;
+
+    result = ((u64(u32(val) & 0x000000FF) >>  u64(0)) ~ result) * kFNV1A64Prime;
+    result = ((u64(u32(val) & 0x0000FF00) >>  u64(8)) ~ result) * kFNV1A64Prime;
+    result = ((u64(u32(val) & 0x00FF0000) >> u64(16)) ~ result) * kFNV1A64Prime;
+    result = ((u64(u32(val) & 0xFF000000) >> u64(24)) ~ result) * kFNV1A64Prime;
+
+    return result;
+}
+
+/// <summary>
+/// Combines a FNV1A64 hash with a value.
+/// </summary>
+/// <param name="hash">Input Hash.</param>
+/// <param name="value">Value to add to the hash.</param>
+/// <returns>A combined FNV1A64 hash.</returns>
+CombineFNV1A64 :: proc (hash_val, value: u64) -> u64
+{
+    hashed_val := hash_val ~ value;
+    hashed_val *= kFNV1A64Prime;
+
+    return hashed_val;
+}
+
+NameSpaces := map[string]u64{
+	"odecs_entities" = FNV1A64_str("Unity.Entities"),
+	"odecs_transforms" = FNV1A64_str("Unity.Transforms"),
+    "odecs_mathematics" = FNV1A64_str("Unity.Mathematics"),
+}
+
+HashNamespace :: proc(type: typeid) -> u64
+{
+    hashed_val := kFNV1A64OffsetBasis;
+    #partial switch info in type_info_of(type).variant {
+        case runtime.Type_Info_Named:
+            namespace_hash, found_hash := NameSpaces[info.pkg]
+            if found_hash {
+                log.debug(info.pkg, namespace_hash)
+                return CombineFNV1A64(hashed_val, namespace_hash)
+            }
+
+        case runtime.Type_Info_Array:
+            log.debug(info.elem.variant)
+            return 0
+        case runtime.Type_Info_Float:
+            return 0
+        case runtime.Type_Info_Quaternion:
+            return 0
+    }
+
+    // System.Reflection and Cecil don't report namespaces the same way so do an alternative:
+    // Find the namespace of an un-nested parent type, then hash each of the nested children names
+    // if (type.IsNested)
+    // {
+    //     hashed_val = CombineFNV1A64(hashed_val, HashNamespace(type.DeclaringType));
+    //     hashed_val = CombineFNV1A64(hashed_val, FNV1A64(type.DeclaringType.Name));
+    // }
+    // else if (!string.IsNullOrEmpty(type.Namespace))
+    //     hashed_val = CombineFNV1A64(hashed_val, FNV1A64_str(type.Namespace));
+
     
-//                         var fieldOffsetAttrs = field.GetCustomAttributes(typeof(FieldOffsetAttribute));
-//                         if (fieldOffsetAttrs.Any())
-//                         {
-//                             var offset = ((FieldOffsetAttribute)fieldOffsetAttrs.First()).Value;
-//                             hash = CombineFNV1A64(hash, (ulong)offset);
-//                         }
+
+    return hashed_val;
+}
+
+
+GetTypeIndex :: proc($type: typeid) -> TypeIndex
+{
+    val, _ := collections.TryGetValue(unity_funcs.stableTypeHashToTypeIndex, u64(GetStableHashFromType(type)))
+    return val
+}
+
+import "core:hash"
+import "core:strings"
+import "core:mem"
+HashTypeName::proc(type: typeid) -> u64
+{
     
-//                         hash = CombineFNV1A64(hash, fieldTypeHash);
-//                     }
-//                 }
+    hashed_val := HashNamespace(type);
+
+    log.debug(type_info_of(type).variant)
+
+    #partial switch info in type_info_of(type).variant
+    {
+        case runtime.Type_Info_Named:
+            base_arr, has_arr_base := info.base.variant.(runtime.Type_Info_Array)
+            if has_arr_base && base_arr.elem.id == f32 {
+                float_hash := CombineFNV1A64(CombineFNV1A64(kFNV1A64OffsetBasis, FNV1A64_str("System")) , FNV1A64_str("Single"))
+                
+                switch base_arr.count {
+                    case 2:
+                        hashed_val = FNV1A64_str("float2")
+                    case 3:
+                        hashed_val = FNV1A64_str("float3")
+                    case 4:
+                        hashed_val = FNV1A64_str("float4")
+                }
+                
+                hashed_val := CombineFNV1A64(CombineFNV1A64(kFNV1A64OffsetBasis, FNV1A64_str("Unity.Mathematics")), hashed_val)
+                for i in 0..<base_arr.count {
+                    hashed_val = CombineFNV1A64(hashed_val, float_hash);
+                }
+                return hashed_val
+            } else {
+                hashed_val = CombineFNV1A64(hashed_val, FNV1A64_str(info.name))
+                return hashed_val
+            }
+
+        case runtime.Type_Info_Float:
+            hashed_system_namespace := CombineFNV1A64(kFNV1A64OffsetBasis, FNV1A64_str("System"))            
+            hashed_val = CombineFNV1A64(hashed_system_namespace, FNV1A64_str("Single"))
+            log.debug("Float: ", hashed_val)
+            return hashed_val
+        case runtime.Type_Info_Quaternion:
+            hashed_namespace := CombineFNV1A64(kFNV1A64OffsetBasis, FNV1A64_str("Unity.Mathematics"))
+            outer_type := CombineFNV1A64(hashed_namespace, FNV1A64_str("quaternion"))
+            float4_hash := CombineFNV1A64(hashed_namespace, FNV1A64_str("float4"))
+
+            float_hash := CombineFNV1A64(CombineFNV1A64(kFNV1A64OffsetBasis, FNV1A64_str("System")) , FNV1A64_str("Single"))
+            for i in 0..<4 {
+                float4_hash = CombineFNV1A64(float4_hash, float_hash);
+            }
+            log.debug("Float4: ", float4_hash)
+            
+            outer_type = CombineFNV1A64(outer_type, float4_hash);
+
+            log.debug("quaternion: ", outer_type)
+            return outer_type
+        case runtime.Type_Info_Array:
+
+    }
+
+
     
-//                 return hash;
-// }
+    // foreach (var ga in type.GenericTypeArguments)
+    // {
+    //     Assert.IsTrue(!ga.IsGenericParameter);
+    //     hash = CombineFNV1A64(hash, HashTypeName(ga));
+    // }
 
-//         // http://www.isthe.com/chongo/src/fnv/hash_64a.c
-//         // with basis and prime:
-//         const ulong kFNV1A64OffsetBasis = 14695981039346656037;
-//         const ulong kFNV1A64Prime = 1099511628211;
-
-//         /// <summary>
-//         /// Generates a FNV1A64 hash.
-//         /// </summary>
-//         /// <param name="text">Text to hash.</param>
-//         /// <returns>Hash of input string.</returns>
-//         public static ulong FNV1A64(string text)
-//         {
-//             ulong result = kFNV1A64OffsetBasis;
-//             foreach (var c in text)
-//             {
-//                 result = kFNV1A64Prime * (result ^ (byte)(c & 255));
-//                 result = kFNV1A64Prime * (result ^ (byte)(c >> 8));
-//             }
-//             return result;
-//         }
-
-//         /// <summary>
-//         /// Generates a FNV1A64 hash.
-//         /// </summary>
-//         /// <param name="text">Text to hash.</param>
-//         /// <typeparam name="T">Unmanaged IUTF8 type.</typeparam>
-//         /// <returns>Hash of input string.</returns>
-//         public static ulong FNV1A64<T>(T text)
-//             where T : unmanaged, INativeList<byte>, IUTF8Bytes
-//         {
-//             ulong result = kFNV1A64OffsetBasis;
-//             for(int i = 0; i <text.Length; ++i)
-//             {
-//                 var c = text[i];
-//                 result = kFNV1A64Prime * (result ^ (byte)(c & 255));
-//                 result = kFNV1A64Prime * (result ^ (byte)(c >> 8));
-//             }
-//             return result;
-//         }
-
-//         /// <summary>
-//         /// Generates a FNV1A64 hash.
-//         /// </summary>
-//         /// <param name="val">Value to hash.</param>
-//         /// <returns>Hash of input.</returns>
-//         public static ulong FNV1A64(int val)
-//         {
-//             ulong result = kFNV1A64OffsetBasis;
-//             unchecked
-//             {
-//                 result = (((ulong)(val & 0x000000FF) >>  0) ^ result) * kFNV1A64Prime;
-//                 result = (((ulong)(val & 0x0000FF00) >>  8) ^ result) * kFNV1A64Prime;
-//                 result = (((ulong)(val & 0x00FF0000) >> 16) ^ result) * kFNV1A64Prime;
-//                 result = (((ulong)(val & 0xFF000000) >> 24) ^ result) * kFNV1A64Prime;
-//             }
-
-//             return result;
-//         }
-
-//         /// <summary>
-//         /// Combines a FNV1A64 hash with a value.
-//         /// </summary>
-//         /// <param name="hash">Input Hash.</param>
-//         /// <param name="value">Value to add to the hash.</param>
-//         /// <returns>A combined FNV1A64 hash.</returns>
-//         public static ulong CombineFNV1A64(ulong hash, ulong value)
-//         {
-//             hash ^= value;
-//             hash *= kFNV1A64Prime;
-
-//             return hash;
-//         }
-
-//         private static ulong HashNamespace(Type type)
-//         {
-//             var hash = kFNV1A64OffsetBasis;
-
-//             // System.Reflection and Cecil don't report namespaces the same way so do an alternative:
-//             // Find the namespace of an un-nested parent type, then hash each of the nested children names
-//             if (type.IsNested)
-//             {
-//                 hash = CombineFNV1A64(hash, HashNamespace(type.DeclaringType));
-//                 hash = CombineFNV1A64(hash, FNV1A64(type.DeclaringType.Name));
-//             }
-//             else if (!string.IsNullOrEmpty(type.Namespace))
-//                 hash = CombineFNV1A64(hash, FNV1A64(type.Namespace));
-
-//             return hash;
-//         }
-
-//         private static ulong HashTypeName(Type type)
-//         {
-//             ulong hash = HashNamespace(type);
-//             hash = CombineFNV1A64(hash, FNV1A64(type.Name));
-//             foreach (var ga in type.GenericTypeArguments)
-//             {
-//                 Assert.IsTrue(!ga.IsGenericParameter);
-//                 hash = CombineFNV1A64(hash, HashTypeName(ga));
-//             }
-
-//             return hash;
-//         }
+    return hashed_val;
+}

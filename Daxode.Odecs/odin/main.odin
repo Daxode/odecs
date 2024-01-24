@@ -6,6 +6,8 @@ import "core:runtime"
 
 import "entities"
 import "collections"
+import "transforms"
+import "mathematics"
 
 odecs_context: runtime.Context
 
@@ -17,19 +19,12 @@ init :: proc "c" (funcs_that_call_unity: ^entities.functions_that_call_unity) {
     log.debug("Odecs has initialized succesfully")
 }
 
-LocalTransform :: struct
-{
-    Position : [3]f32,
-    Scale : f32,
-    Rotation : quaternion128
-}
-
 SpinSpeed :: struct {
     radiansPerSecond : f32
 }
 
 @export
-Rotate :: proc "c" (state: ^entities.SystemState, query: ^entities.EntityQuery, transform_handle: ^entities.ComponentTypeHandle(LocalTransform), spinspeed_handle: ^entities.ComponentTypeHandle(SpinSpeed))
+Rotate :: proc "c" (state: ^entities.SystemState, query: ^entities.EntityQuery, transform_handle: ^entities.ComponentTypeHandle(transforms.LocalTransform), spinspeed_handle: ^entities.ComponentTypeHandle(SpinSpeed))
 {
     context = odecs_context
     time := state.m_WorldUnmanaged.m_Impl.CurrentTime;
@@ -49,13 +44,13 @@ Rotate :: proc "c" (state: ^entities.SystemState, query: ^entities.EntityQuery, 
     }
 
     
-    if typeindex, typeindex_ok := collections.TryGetValue(entities.unity_funcs.stableTypeHashToTypeIndex, u64(6655582417222636632)); typeindex_ok {
-        log.debug(typeindex)
-    }
+    log.debug(entities.GetTypeIndex(transforms.LocalTransform))
+    log.debug(entities.GetTypeIndex(SpinSpeed))
 
-    if typeindex, typeindex_ok := collections.TryGetValue(entities.unity_funcs.stableTypeHashToTypeIndex, u64(1)); typeindex_ok {
-        log.debug(typeindex)
-    }
+    log.debug("f32:",entities.GetStableHashFromType(f32))
+    log.debug("q128:",entities.GetStableHashFromType(quaternion128))
+    log.debug("f4:",entities.GetStableHashFromType(mathematics.float4))
+    log.debug("f3:",entities.GetStableHashFromType(mathematics.float3))
 } 
 
 RotateY :: proc "contextless" (angle: f32) -> quaternion128
