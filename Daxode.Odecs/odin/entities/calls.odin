@@ -180,7 +180,7 @@ HashType :: proc (T: typeid) -> u64
                         hashed_val = CombineFNV1A64(hashed_val, fieldTypeHash);
                 }
             } else {
-                log.info("doesn't need to recurse into" , info.pkg, info.name)
+                // log.info("doesn't need to recurse into" , info.pkg, info.name)
             }
     }
 
@@ -253,12 +253,12 @@ HashNamespace :: proc(type: typeid) -> u64
         case runtime.Type_Info_Named:
             namespace_hash, found_hash := NameSpaces[info.pkg]
             if found_hash {
-                log.debug(info.pkg, namespace_hash)
+                // log.debug(info.pkg, namespace_hash)
                 return CombineFNV1A64(hashed_val, namespace_hash)
             }
 
         case runtime.Type_Info_Array:
-            log.debug(info.elem.variant)
+            // log.debug(info.elem.variant)
             return 0
         case runtime.Type_Info_Float:
             return 0
@@ -296,7 +296,7 @@ HashTypeName::proc(type: typeid) -> u64
     
     hashed_val := HashNamespace(type);
 
-    log.debug(type_info_of(type).variant)
+    // log.debug(type_info_of(type).variant)
 
     #partial switch info in type_info_of(type).variant
     {
@@ -327,7 +327,7 @@ HashTypeName::proc(type: typeid) -> u64
         case runtime.Type_Info_Float:
             hashed_system_namespace := CombineFNV1A64(kFNV1A64OffsetBasis, FNV1A64_str("System"))            
             hashed_val = CombineFNV1A64(hashed_system_namespace, FNV1A64_str("Single"))
-            log.debug("Float: ", hashed_val)
+            // log.debug("Float: ", hashed_val)
             return hashed_val
         case runtime.Type_Info_Quaternion:
             hashed_namespace := CombineFNV1A64(kFNV1A64OffsetBasis, FNV1A64_str("Unity.Mathematics"))
@@ -338,11 +338,11 @@ HashTypeName::proc(type: typeid) -> u64
             for i in 0..<4 {
                 float4_hash = CombineFNV1A64(float4_hash, float_hash);
             }
-            log.debug("Float4: ", float4_hash)
+            // log.debug("Float4: ", float4_hash)
             
             outer_type = CombineFNV1A64(outer_type, float4_hash);
 
-            log.debug("quaternion: ", outer_type)
+            // log.debug("quaternion: ", outer_type)
             return outer_type
         case runtime.Type_Info_Array:
 

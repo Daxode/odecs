@@ -58,12 +58,6 @@ partial struct odecs_setup_system : ISystem {
 
         state.EntityManager.CompleteDependencyBeforeRW<LocalTransform>();
         //PrintFieldOfType<UnsafeParallelHashMapData>();
-        PrintStableTypeHash<float>();
-        PrintStableTypeHash<float4>();
-        PrintStableTypeHash<float3>();
-        PrintStableTypeHash<quaternion>();
-        PrintStableTypeHash<LocalTransform>();
-        PrintStableTypeHash<SpinSpeed>();
 
         odecs_calls.Rotate(
             ref state, ref query,
